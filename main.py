@@ -256,8 +256,8 @@ class OverlayWindow(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("Background Companion")
-        # Visual sizing - more compact
-        self.setFixedSize(420, 680)
+        # Visual sizing - adjusted for content
+        self.setFixedSize(440, 750)
 
         # Main container widget with rounded corners
         container = QWidget()
@@ -269,12 +269,12 @@ class OverlayWindow(QWidget):
         root.setSpacing(0)
 
         content = QVBoxLayout()
-        content.setContentsMargins(24, 24, 24, 24)
-        content.setSpacing(20)
+        content.setContentsMargins(20, 20, 20, 20)
+        content.setSpacing(14)
 
         # Title bar area (draggable) with modern header
         title_section = QVBoxLayout()
-        title_section.setSpacing(12)
+        title_section.setSpacing(10)
 
         title_h = QHBoxLayout()
         title_h.setSpacing(10)
@@ -288,7 +288,7 @@ class OverlayWindow(QWidget):
         title_lbl = QLabel("Background Companion")
         title_lbl.setObjectName("titleLabel")
         title_font = QFont()
-        title_font.setPointSize(16)
+        title_font.setPointSize(15)
         title_font.setBold(True)
         title_lbl.setFont(title_font)
         title_h.addWidget(title_lbl)
@@ -320,20 +320,20 @@ class OverlayWindow(QWidget):
         self.start_btn.setObjectName("primaryButton")
         self.start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.start_btn.clicked.connect(self.on_start_stop)
-        self.start_btn.setFixedHeight(48)
+        self.start_btn.setFixedHeight(46)
         btn_h.addWidget(self.start_btn, 2)
 
         self.hide_btn = QPushButton("Hide")
         self.hide_btn.setObjectName("secondaryButton")
         self.hide_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.hide_btn.clicked.connect(self.toggle_visibility)
-        self.hide_btn.setFixedHeight(48)
+        self.hide_btn.setFixedHeight(46)
         btn_h.addWidget(self.hide_btn, 1)
         content.addLayout(btn_h)
 
         # Ask question section with modern input
         ask_section = QVBoxLayout()
-        ask_section.setSpacing(10)
+        ask_section.setSpacing(8)
 
         ask_lbl = QLabel("ASK QUESTION")
         ask_lbl.setObjectName("sectionLabel")
@@ -346,15 +346,15 @@ class OverlayWindow(QWidget):
         self.ask_edit.setObjectName("modernInput")
         self.ask_edit.setPlaceholderText("What would you like to know?")
         self.ask_edit.returnPressed.connect(self.on_ask)
-        self.ask_edit.setFixedHeight(44)
+        self.ask_edit.setFixedHeight(42)
         ask_input_h.addWidget(self.ask_edit)
 
         self.ask_btn = QPushButton("Send")
         self.ask_btn.setObjectName("accentButton")
         self.ask_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.ask_btn.clicked.connect(self.on_ask)
-        self.ask_btn.setFixedHeight(44)
-        self.ask_btn.setFixedWidth(90)
+        self.ask_btn.setFixedHeight(42)
+        self.ask_btn.setFixedWidth(85)
         ask_input_h.addWidget(self.ask_btn)
 
         ask_section.addLayout(ask_input_h)
@@ -379,7 +379,7 @@ class OverlayWindow(QWidget):
         self.response_area = QTextEdit()
         self.response_area.setObjectName("modernTextArea")
         self.response_area.setReadOnly(True)
-        self.response_area.setFixedHeight(140)
+        self.response_area.setFixedHeight(100)
         content.addWidget(self.response_area)
 
         # Separator
@@ -401,15 +401,15 @@ class OverlayWindow(QWidget):
         self.api_key_edit.setObjectName("modernInput")
         self.api_key_edit.setPlaceholderText("API Key (optional)")
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key_edit.setFixedHeight(40)
+        self.api_key_edit.setFixedHeight(38)
         cfg_form_h.addWidget(self.api_key_edit)
 
         self.save_cfg_btn = QPushButton("Save")
         self.save_cfg_btn.setObjectName("accentButton")
         self.save_cfg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_cfg_btn.clicked.connect(self.save_config)
-        self.save_cfg_btn.setFixedHeight(40)
-        self.save_cfg_btn.setFixedWidth(80)
+        self.save_cfg_btn.setFixedHeight(38)
+        self.save_cfg_btn.setFixedWidth(75)
         cfg_form_h.addWidget(self.save_cfg_btn)
         content.addLayout(cfg_form_h)
 
@@ -425,8 +425,8 @@ class OverlayWindow(QWidget):
         self.interval_spin.setRange(1, 86400)
         self.interval_spin.setValue(int(self.config.get("interval", 60)))
         self.interval_spin.setSuffix(" sec")
-        self.interval_spin.setFixedHeight(40)
-        self.interval_spin.setFixedWidth(130)
+        self.interval_spin.setFixedHeight(38)
+        self.interval_spin.setFixedWidth(125)
         interval_h.addWidget(self.interval_spin)
         interval_h.addStretch()
         content.addLayout(interval_h)
@@ -442,7 +442,7 @@ class OverlayWindow(QWidget):
 
         self.watch_list = QListWidget()
         self.watch_list.setObjectName("modernList")
-        self.watch_list.setFixedHeight(90)
+        self.watch_list.setFixedHeight(70)
         for d in self.config.get("watch_dirs", []):
             self.watch_list.addItem(QListWidgetItem(d))
         content.addWidget(self.watch_list)
@@ -454,14 +454,14 @@ class OverlayWindow(QWidget):
         add_dir_btn.setObjectName("secondaryButton")
         add_dir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         add_dir_btn.clicked.connect(self.on_add_dir)
-        add_dir_btn.setFixedHeight(38)
+        add_dir_btn.setFixedHeight(36)
         watch_btn_h.addWidget(add_dir_btn)
 
         remove_dir_btn = QPushButton("Remove")
         remove_dir_btn.setObjectName("textButton")
         remove_dir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         remove_dir_btn.clicked.connect(self.on_remove_dir)
-        remove_dir_btn.setFixedHeight(38)
+        remove_dir_btn.setFixedHeight(36)
         watch_btn_h.addWidget(remove_dir_btn)
         content.addLayout(watch_btn_h)
 
@@ -476,7 +476,7 @@ class OverlayWindow(QWidget):
         self.log_area = QTextEdit()
         self.log_area.setObjectName("modernTextArea")
         self.log_area.setReadOnly(True)
-        self.log_area.setFixedHeight(90)
+        self.log_area.setFixedHeight(70)
         content.addWidget(self.log_area)
 
         container.setLayout(content)
@@ -523,16 +523,17 @@ class OverlayWindow(QWidget):
 
             #sectionLabel {
                 color: #A1A1AA;
-                font-size: 10px;
+                font-size: 9px;
                 font-weight: 700;
                 text-transform: uppercase;
-                letter-spacing: 1.2px;
-                margin-top: 2px;
+                letter-spacing: 1.3px;
+                margin: 0;
+                padding: 0;
             }
 
             #fieldLabel {
                 color: #D4D4D8;
-                font-size: 13px;
+                font-size: 12px;
                 font-weight: 500;
             }
             
