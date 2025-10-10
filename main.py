@@ -33,7 +33,7 @@ try:
     from PyQt6.QtWidgets import (
         QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
         QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
-        QGraphicsDropShadowEffect
+        QGraphicsDropShadowEffect, QTabWidget
     )
     from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve
     from PyQt6.QtGui import QFont, QAction, QColor
@@ -43,7 +43,7 @@ except Exception:
         from PyQt5.QtWidgets import (
             QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
             QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
-            QGraphicsDropShadowEffect
+            QGraphicsDropShadowEffect, QTabWidget
         )
         from PyQt5.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve
         from PyQt5.QtGui import QFont, QAction, QColor
@@ -255,14 +255,14 @@ class OverlayWindow(QWidget):
         self.start_polling_companion_queue()
 
     def init_ui(self):
-        self.setWindowTitle("Background Companion Overlay")
-        # Visual sizing
-        self.setFixedSize(450, 620)
+        self.setWindowTitle("Background Companion")
+        # Visual sizing - compact for tabs
+        self.setFixedSize(440, 580)
 
         # Main container widget with rounded corners
         container = QWidget()
         container.setObjectName("container")
-        
+
         # Layouts
         root = QVBoxLayout()
         root.setContentsMargins(0, 0, 0, 0)
@@ -273,19 +273,22 @@ class OverlayWindow(QWidget):
         content.setSpacing(16)
 
         # Title bar area (draggable) with modern header
+        title_section = QVBoxLayout()
+        title_section.setSpacing(10)
+
         title_h = QHBoxLayout()
-        title_h.setSpacing(12)
-        
+        title_h.setSpacing(10)
+
         # Status indicator dot
         self.status_dot = QLabel("●")
         self.status_dot.setObjectName("statusDot")
-        self.status_dot.setStyleSheet("color: #6B7280; font-size: 20px;")
+        self.status_dot.setStyleSheet("color: #6B7280; font-size: 16px;")
         title_h.addWidget(self.status_dot)
-        
+
         title_lbl = QLabel("Background Companion")
         title_lbl.setObjectName("titleLabel")
         title_font = QFont()
-        title_font.setPointSize(14)
+        title_font.setPointSize(15)
         title_font.setBold(True)
         title_lbl.setFont(title_font)
         title_h.addWidget(title_lbl)
@@ -299,171 +302,195 @@ class OverlayWindow(QWidget):
         self.status_lbl.setFont(status_font)
         title_h.addWidget(self.status_lbl)
 
-        content.addLayout(title_h)
+        title_section.addLayout(title_h)
 
         # Separator line
         separator1 = QLabel()
         separator1.setFixedHeight(1)
-        separator1.setStyleSheet("background: rgba(255, 255, 255, 0.1);")
-        content.addWidget(separator1)
+        separator1.setStyleSheet("background: rgba(255, 255, 255, 0.08);")
+        title_section.addWidget(separator1)
+
+        content.addLayout(title_section)
+
+        # Tab widget
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("modernTabs")
+        content.addWidget(self.tabs)
+
+        # === CHAT TAB ===
+        chat_tab = QWidget()
+        chat_layout = QVBoxLayout(chat_tab)
+        chat_layout.setContentsMargins(0, 16, 0, 0)
+        chat_layout.setSpacing(16)
 
         # Buttons: Start/Stop with modern design
         btn_h = QHBoxLayout()
-        btn_h.setSpacing(12)
-        
+        btn_h.setSpacing(10)
+
         self.start_btn = QPushButton("Start Recording")
         self.start_btn.setObjectName("primaryButton")
         self.start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.start_btn.clicked.connect(self.on_start_stop)
-        self.start_btn.setFixedHeight(44)
-        btn_h.addWidget(self.start_btn)
+        self.start_btn.setFixedHeight(46)
+        btn_h.addWidget(self.start_btn, 2)
 
         self.hide_btn = QPushButton("Hide")
         self.hide_btn.setObjectName("secondaryButton")
         self.hide_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.hide_btn.clicked.connect(self.toggle_visibility)
-        self.hide_btn.setFixedHeight(44)
-        btn_h.addWidget(self.hide_btn)
-        content.addLayout(btn_h)
+        self.hide_btn.setFixedHeight(46)
+        btn_h.addWidget(self.hide_btn, 1)
+        chat_layout.addLayout(btn_h)
 
         # Ask question section with modern input
         ask_section = QVBoxLayout()
         ask_section.setSpacing(8)
-        
-        ask_lbl = QLabel("Ask a Question")
+
+        ask_lbl = QLabel("ASK QUESTION")
         ask_lbl.setObjectName("sectionLabel")
         ask_section.addWidget(ask_lbl)
-        
+
         ask_input_h = QHBoxLayout()
-        ask_input_h.setSpacing(8)
-        
+        ask_input_h.setSpacing(10)
+
         self.ask_edit = QLineEdit()
         self.ask_edit.setObjectName("modernInput")
-        self.ask_edit.setPlaceholderText("Type your question here...")
+        self.ask_edit.setPlaceholderText("What would you like to know?")
         self.ask_edit.returnPressed.connect(self.on_ask)
-        self.ask_edit.setFixedHeight(40)
+        self.ask_edit.setFixedHeight(42)
         ask_input_h.addWidget(self.ask_edit)
 
         self.ask_btn = QPushButton("Send")
         self.ask_btn.setObjectName("accentButton")
         self.ask_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.ask_btn.clicked.connect(self.on_ask)
-        self.ask_btn.setFixedHeight(40)
-        self.ask_btn.setFixedWidth(80)
+        self.ask_btn.setFixedHeight(42)
+        self.ask_btn.setFixedWidth(85)
         ask_input_h.addWidget(self.ask_btn)
-        
+
         ask_section.addLayout(ask_input_h)
-        content.addLayout(ask_section)
+        chat_layout.addLayout(ask_section)
 
         # Response display with header
         resp_header = QHBoxLayout()
-        resp_lbl = QLabel("Responses")
+        resp_header.setSpacing(0)
+        resp_lbl = QLabel("")
         resp_lbl.setObjectName("sectionLabel")
         resp_header.addWidget(resp_lbl)
         resp_header.addStretch()
-        
+
         self.clear_resp_btn = QPushButton("Clear")
         self.clear_resp_btn.setObjectName("textButton")
         self.clear_resp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.clear_resp_btn.clicked.connect(lambda: self.response_area.clear())
-        self.clear_resp_btn.setFixedHeight(28)
+        self.clear_resp_btn.setFixedHeight(24)
         resp_header.addWidget(self.clear_resp_btn)
         content.addLayout(resp_header)
-        
+
         self.response_area = QTextEdit()
         self.response_area.setObjectName("modernTextArea")
         self.response_area.setReadOnly(True)
-        self.response_area.setFixedHeight(120)
-        content.addWidget(self.response_area)
+        chat_layout.addWidget(self.response_area)
 
-        # Config section with modern collapsible style
-        cfg_lbl = QLabel("Settings")
+        # Add chat tab
+        self.tabs.addTab(chat_tab, "Chat")
+
+        # === SETTINGS TAB ===
+        settings_tab = QWidget()
+        settings_layout = QVBoxLayout(settings_tab)
+        settings_layout.setContentsMargins(0, 16, 0, 0)
+        settings_layout.setSpacing(16)
+
+        # Config section
+        cfg_lbl = QLabel("CONFIGURATION")
         cfg_lbl.setObjectName("sectionLabel")
-        content.addWidget(cfg_lbl)
+        settings_layout.addWidget(cfg_lbl)
 
         # API Key with save button
         cfg_form_h = QHBoxLayout()
-        cfg_form_h.setSpacing(8)
-        
+        cfg_form_h.setSpacing(10)
+
         self.api_key_edit = QLineEdit(self.config.get("api_key", ""))
         self.api_key_edit.setObjectName("modernInput")
-        self.api_key_edit.setPlaceholderText("API Key")
+        self.api_key_edit.setPlaceholderText("API Key (optional)")
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key_edit.setFixedHeight(36)
+        self.api_key_edit.setFixedHeight(38)
         cfg_form_h.addWidget(self.api_key_edit)
 
         self.save_cfg_btn = QPushButton("Save")
         self.save_cfg_btn.setObjectName("accentButton")
         self.save_cfg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_cfg_btn.clicked.connect(self.save_config)
-        self.save_cfg_btn.setFixedHeight(36)
-        self.save_cfg_btn.setFixedWidth(70)
+        self.save_cfg_btn.setFixedHeight(38)
+        self.save_cfg_btn.setFixedWidth(75)
         cfg_form_h.addWidget(self.save_cfg_btn)
-        content.addLayout(cfg_form_h)
+        settings_layout.addLayout(cfg_form_h)
 
         # Interval spinner with modern styling
         interval_h = QHBoxLayout()
-        interval_h.setSpacing(12)
+        interval_h.setSpacing(16)
         interval_label = QLabel("Capture Interval")
         interval_label.setObjectName("fieldLabel")
         interval_h.addWidget(interval_label)
-        
+
         self.interval_spin = QSpinBox()
         self.interval_spin.setObjectName("modernSpinBox")
         self.interval_spin.setRange(1, 86400)
         self.interval_spin.setValue(int(self.config.get("interval", 60)))
         self.interval_spin.setSuffix(" sec")
-        self.interval_spin.setFixedHeight(36)
-        self.interval_spin.setFixedWidth(120)
+        self.interval_spin.setFixedHeight(38)
+        self.interval_spin.setFixedWidth(125)
         interval_h.addWidget(self.interval_spin)
         interval_h.addStretch()
-        content.addLayout(interval_h)
+        settings_layout.addLayout(interval_h)
 
         # Watch directories with modern list
         watch_header = QHBoxLayout()
-        watch_lbl = QLabel("Watched Directories")
+        watch_header.setSpacing(0)
+        watch_lbl = QLabel("WATCHED DIRECTORIES")
         watch_lbl.setObjectName("sectionLabel")
         watch_header.addWidget(watch_lbl)
         watch_header.addStretch()
-        content.addLayout(watch_header)
-        
+        settings_layout.addLayout(watch_header)
+
         self.watch_list = QListWidget()
         self.watch_list.setObjectName("modernList")
-        self.watch_list.setFixedHeight(80)
+        self.watch_list.setFixedHeight(70)
         for d in self.config.get("watch_dirs", []):
             self.watch_list.addItem(QListWidgetItem(d))
-        content.addWidget(self.watch_list)
+        settings_layout.addWidget(self.watch_list)
 
         watch_btn_h = QHBoxLayout()
-        watch_btn_h.setSpacing(8)
-        
+        watch_btn_h.setSpacing(10)
+
         add_dir_btn = QPushButton("+ Add Directory")
         add_dir_btn.setObjectName("secondaryButton")
         add_dir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         add_dir_btn.clicked.connect(self.on_add_dir)
         add_dir_btn.setFixedHeight(36)
         watch_btn_h.addWidget(add_dir_btn)
-        
+
         remove_dir_btn = QPushButton("Remove")
         remove_dir_btn.setObjectName("textButton")
         remove_dir_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         remove_dir_btn.clicked.connect(self.on_remove_dir)
         remove_dir_btn.setFixedHeight(36)
         watch_btn_h.addWidget(remove_dir_btn)
-        content.addLayout(watch_btn_h)
+        settings_layout.addLayout(watch_btn_h)
 
-        # Log area with compact design
-        log_header = QHBoxLayout()
-        log_lbl = QLabel("Activity Log")
+        # Log area
+        log_lbl = QLabel("ACTIVITY LOG")
         log_lbl.setObjectName("sectionLabel")
-        log_header.addWidget(log_lbl)
-        content.addLayout(log_header)
-        
+        settings_layout.addWidget(log_lbl)
+
         self.log_area = QTextEdit()
         self.log_area.setObjectName("modernTextArea")
         self.log_area.setReadOnly(True)
-        self.log_area.setFixedHeight(80)
-        content.addWidget(self.log_area)
+        settings_layout.addWidget(self.log_area)
+        settings_layout.addStretch()
+
+        # Add settings tab
+        self.tabs.addTab(settings_tab, "Settings")
 
         container.setLayout(content)
         root.addWidget(container)
@@ -474,9 +501,9 @@ class OverlayWindow(QWidget):
         
         # Add subtle drop shadow
         shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(40)
-        shadow.setColor(QColor(0, 0, 0, 160))
-        shadow.setOffset(0, 10)
+        shadow.setBlurRadius(50)
+        shadow.setColor(QColor(0, 0, 0, 180))
+        shadow.setOffset(0, 12)
         container.setGraphicsEffect(shadow)
 
     def apply_modern_style(self):
@@ -485,220 +512,257 @@ class OverlayWindow(QWidget):
             #container {
                 background: qlineargradient(
                     x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(30, 30, 35, 0.95),
-                    stop:1 rgba(20, 20, 25, 0.95)
+                    stop:0 rgba(24, 24, 27, 0.98),
+                    stop:1 rgba(18, 18, 21, 0.98)
                 );
-                border-radius: 16px;
-                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 20px;
+                border: 1px solid rgba(255, 255, 255, 0.06);
             }
-            
+
             /* Typography */
             #titleLabel {
-                color: #FFFFFF;
+                color: #FAFAFA;
                 font-weight: 600;
-                letter-spacing: 0.5px;
+                letter-spacing: -0.3px;
             }
-            
+
             #statusLabel {
-                color: #9CA3AF;
-                background: rgba(255, 255, 255, 0.05);
-                padding: 4px 12px;
-                border-radius: 12px;
+                color: #A1A1AA;
+                background: rgba(255, 255, 255, 0.04);
+                padding: 6px 14px;
+                border-radius: 14px;
                 font-weight: 500;
             }
-            
+
             #sectionLabel {
-                color: #E5E7EB;
-                font-size: 11px;
-                font-weight: 600;
+                color: #A1A1AA;
+                font-size: 9px;
+                font-weight: 700;
                 text-transform: uppercase;
-                letter-spacing: 1px;
-                margin-top: 4px;
+                letter-spacing: 1.3px;
+                margin: 0;
+                padding: 20px 0 0 0;
             }
-            
+
             #fieldLabel {
-                color: #D1D5DB;
-                font-size: 10px;
+                color: #D4D4D8;
+                font-size: 12px;
+                font-weight: 500;
             }
             
             /* Primary button - gradient with hover effect */
             #primaryButton {
                 background: qlineargradient(
                     x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #3B82F6,
-                    stop:1 #2563EB
-                );
-                color: white;
-                border: none;
-                border-radius: 10px;
-                font-weight: 600;
-                font-size: 13px;
-                padding: 0 20px;
-            }
-            
-            #primaryButton:hover {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
                     stop:0 #2563EB,
                     stop:1 #1D4ED8
                 );
+                color: #FFFFFF;
+                border: none;
+                border-radius: 12px;
+                font-weight: 600;
+                font-size: 14px;
+                letter-spacing: -0.2px;
             }
-            
+
+            #primaryButton:hover {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #1D4ED8,
+                    stop:1 #1E40AF
+                );
+            }
+
             #primaryButton:pressed {
-                background: #1E40AF;
+                background: #1E3A8A;
             }
-            
+
             /* Secondary button */
             #secondaryButton {
-                background: rgba(255, 255, 255, 0.08);
-                color: #E5E7EB;
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 10px;
+                background: rgba(255, 255, 255, 0.06);
+                color: #FAFAFA;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 12px;
                 font-weight: 500;
                 font-size: 13px;
-                padding: 0 20px;
+                letter-spacing: -0.2px;
             }
-            
+
             #secondaryButton:hover {
-                background: rgba(255, 255, 255, 0.12);
-                border: 1px solid rgba(255, 255, 255, 0.2);
+                background: rgba(255, 255, 255, 0.10);
+                border: 1px solid rgba(255, 255, 255, 0.14);
             }
-            
+
             #secondaryButton:pressed {
-                background: rgba(255, 255, 255, 0.05);
+                background: rgba(255, 255, 255, 0.04);
             }
             
             /* Accent button */
             #accentButton {
                 background: #10B981;
-                color: white;
+                color: #FFFFFF;
                 border: none;
-                border-radius: 8px;
+                border-radius: 10px;
                 font-weight: 600;
-                font-size: 12px;
+                font-size: 13px;
+                letter-spacing: -0.2px;
             }
-            
+
             #accentButton:hover {
                 background: #059669;
             }
-            
+
             #accentButton:pressed {
                 background: #047857;
             }
-            
+
             /* Text button */
             #textButton {
                 background: transparent;
-                color: #9CA3AF;
+                color: #71717A;
                 border: none;
                 font-size: 11px;
-                font-weight: 500;
-                padding: 0 12px;
+                font-weight: 600;
+                padding: 0 10px;
             }
-            
+
             #textButton:hover {
-                color: #E5E7EB;
-                background: rgba(255, 255, 255, 0.05);
-                border-radius: 6px;
+                color: #D4D4D8;
+                background: rgba(255, 255, 255, 0.06);
+                border-radius: 8px;
             }
             
             /* Modern inputs */
             #modernInput {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 8px;
-                color: #F3F4F6;
-                padding: 0 14px;
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 10px;
+                color: #FAFAFA;
+                padding: 0 16px;
                 font-size: 13px;
+                font-weight: 400;
             }
-            
+
             #modernInput:focus {
-                background: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(59, 130, 246, 0.5);
+                background: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(59, 130, 246, 0.4);
                 outline: none;
             }
-            
+
             #modernInput::placeholder {
-                color: #6B7280;
+                color: #52525B;
+                font-weight: 400;
             }
-            
+
             /* Text areas */
             #modernTextArea {
-                background: rgba(0, 0, 0, 0.3);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 8px;
-                color: #E5E7EB;
-                padding: 12px;
+                background: rgba(0, 0, 0, 0.25);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 10px;
+                color: #E4E4E7;
+                padding: 14px;
                 font-size: 12px;
-                font-family: 'Consolas', 'Monaco', monospace;
-                line-height: 1.5;
+                font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+                line-height: 1.6;
             }
             
             /* Spin box */
             #modernSpinBox {
-                background: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 8px;
-                color: #F3F4F6;
-                padding: 0 8px;
-                font-size: 12px;
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 10px;
+                color: #FAFAFA;
+                padding: 0 12px;
+                font-size: 13px;
+                font-weight: 500;
             }
-            
+
             #modernSpinBox::up-button, #modernSpinBox::down-button {
-                background: rgba(255, 255, 255, 0.08);
+                background: rgba(255, 255, 255, 0.06);
                 border: none;
-                border-radius: 4px;
-                width: 20px;
+                border-radius: 6px;
+                width: 24px;
             }
-            
+
             #modernSpinBox::up-button:hover, #modernSpinBox::down-button:hover {
-                background: rgba(255, 255, 255, 0.15);
+                background: rgba(255, 255, 255, 0.12);
             }
             
             /* List widget */
             #modernList {
-                background: rgba(0, 0, 0, 0.3);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 8px;
-                color: #D1D5DB;
-                padding: 4px;
+                background: rgba(0, 0, 0, 0.25);
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 10px;
+                color: #D4D4D8;
+                padding: 6px;
                 font-size: 11px;
             }
-            
+
             #modernList::item {
-                padding: 6px 10px;
-                border-radius: 4px;
-                margin: 2px;
+                padding: 8px 12px;
+                border-radius: 6px;
+                margin: 3px;
             }
-            
+
             #modernList::item:selected {
-                background: rgba(59, 130, 246, 0.3);
-                color: #FFFFFF;
+                background: rgba(59, 130, 246, 0.25);
+                color: #FAFAFA;
+                border: 1px solid rgba(59, 130, 246, 0.3);
             }
-            
+
             #modernList::item:hover {
-                background: rgba(255, 255, 255, 0.05);
+                background: rgba(255, 255, 255, 0.04);
             }
             
             /* Scrollbars */
             QScrollBar:vertical {
                 background: transparent;
-                width: 8px;
-                border-radius: 4px;
+                width: 6px;
+                border-radius: 3px;
+                margin: 2px;
             }
-            
+
             QScrollBar::handle:vertical {
-                background: rgba(255, 255, 255, 0.2);
-                border-radius: 4px;
-                min-height: 20px;
+                background: rgba(255, 255, 255, 0.15);
+                border-radius: 3px;
+                min-height: 30px;
             }
-            
+
             QScrollBar::handle:vertical:hover {
-                background: rgba(255, 255, 255, 0.3);
+                background: rgba(255, 255, 255, 0.25);
             }
-            
+
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
+            }
+
+            /* Tab Widget */
+            QTabWidget::pane {
+                border: none;
+                background: transparent;
+                margin-top: 0px;
+            }
+
+            QTabBar::tab {
+                background: rgba(255, 255, 255, 0.04);
+                color: #71717A;
+                border: none;
+                border-radius: 10px 10px 0 0;
+                padding: 12px 24px;
+                margin-right: 4px;
+                font-size: 12px;
+                font-weight: 600;
+                letter-spacing: 0.3px;
+            }
+
+            QTabBar::tab:selected {
+                background: rgba(255, 255, 255, 0.08);
+                color: #FAFAFA;
+            }
+
+            QTabBar::tab:hover:!selected {
+                background: rgba(255, 255, 255, 0.06);
+                color: #A1A1AA;
             }
         """)
 
@@ -756,21 +820,21 @@ class OverlayWindow(QWidget):
 
     def append_log(self, text: str):
         ts = time.strftime("%H:%M:%S")
-        self.log_area.append(f"<span style='color: #6B7280;'>[{ts}]</span> <span style='color: #D1D5DB;'>{text}</span>")
+        self.log_area.append(f"<span style='color: #71717A; font-size: 10px;'>[{ts}]</span> <span style='color: #D4D4D8;'>{text}</span>")
 
     def set_status(self, text: str):
         self.status_lbl.setText(text)
         # Update status dot color based on state
         if text.lower() in ["recording", "active"]:
-            self.status_dot.setStyleSheet("color: #10B981; font-size: 20px;")
+            self.status_dot.setStyleSheet("color: #10B981; font-size: 16px;")
         elif "error" in text.lower():
-            self.status_dot.setStyleSheet("color: #EF4444; font-size: 20px;")
+            self.status_dot.setStyleSheet("color: #EF4444; font-size: 16px;")
         else:
-            self.status_dot.setStyleSheet("color: #6B7280; font-size: 20px;")
+            self.status_dot.setStyleSheet("color: #71717A; font-size: 16px;")
 
     def append_response(self, text: str):
         ts = time.strftime("%H:%M:%S")
-        self.response_area.append(f"<div style='margin-bottom: 8px;'><span style='color: #6B7280; font-size: 10px;'>[{ts}]</span><br><span style='color: #F3F4F6;'>{text}</span></div>")
+        self.response_area.append(f"<div style='margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.04);'><span style='color: #71717A; font-size: 10px;'>[{ts}]</span><br><span style='color: #FAFAFA; line-height: 1.6; margin-top: 4px; display: block;'>{text}</span></div>")
 
     def toggle_visibility(self):
         if self.isVisible():
