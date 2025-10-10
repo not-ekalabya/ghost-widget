@@ -33,7 +33,7 @@ try:
     from PyQt6.QtWidgets import (
         QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
         QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
-        QGraphicsDropShadowEffect
+        QGraphicsDropShadowEffect, QTabWidget
     )
     from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve
     from PyQt6.QtGui import QFont, QAction, QColor
@@ -43,7 +43,7 @@ except Exception:
         from PyQt5.QtWidgets import (
             QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
             QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
-            QGraphicsDropShadowEffect
+            QGraphicsDropShadowEffect, QTabWidget
         )
         from PyQt5.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve
         from PyQt5.QtGui import QFont, QAction, QColor
@@ -256,8 +256,8 @@ class OverlayWindow(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("Background Companion")
-        # Visual sizing - adjusted for content
-        self.setFixedSize(440, 750)
+        # Visual sizing - compact for tabs
+        self.setFixedSize(440, 580)
 
         # Main container widget with rounded corners
         container = QWidget()
@@ -270,7 +270,7 @@ class OverlayWindow(QWidget):
 
         content = QVBoxLayout()
         content.setContentsMargins(20, 20, 20, 20)
-        content.setSpacing(14)
+        content.setSpacing(16)
 
         # Title bar area (draggable) with modern header
         title_section = QVBoxLayout()
@@ -312,6 +312,17 @@ class OverlayWindow(QWidget):
 
         content.addLayout(title_section)
 
+        # Tab widget
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("modernTabs")
+        content.addWidget(self.tabs)
+
+        # === CHAT TAB ===
+        chat_tab = QWidget()
+        chat_layout = QVBoxLayout(chat_tab)
+        chat_layout.setContentsMargins(0, 16, 0, 0)
+        chat_layout.setSpacing(16)
+
         # Buttons: Start/Stop with modern design
         btn_h = QHBoxLayout()
         btn_h.setSpacing(10)
@@ -329,7 +340,7 @@ class OverlayWindow(QWidget):
         self.hide_btn.clicked.connect(self.toggle_visibility)
         self.hide_btn.setFixedHeight(46)
         btn_h.addWidget(self.hide_btn, 1)
-        content.addLayout(btn_h)
+        chat_layout.addLayout(btn_h)
 
         # Ask question section with modern input
         ask_section = QVBoxLayout()
@@ -358,7 +369,7 @@ class OverlayWindow(QWidget):
         ask_input_h.addWidget(self.ask_btn)
 
         ask_section.addLayout(ask_input_h)
-        content.addLayout(ask_section)
+        chat_layout.addLayout(ask_section)
 
         # Response display with header
         resp_header = QHBoxLayout()
@@ -379,19 +390,21 @@ class OverlayWindow(QWidget):
         self.response_area = QTextEdit()
         self.response_area.setObjectName("modernTextArea")
         self.response_area.setReadOnly(True)
-        self.response_area.setFixedHeight(100)
-        content.addWidget(self.response_area)
+        chat_layout.addWidget(self.response_area)
 
-        # Separator
-        separator2 = QLabel()
-        separator2.setFixedHeight(1)
-        separator2.setStyleSheet("background: rgba(255, 255, 255, 0.05);")
-        content.addWidget(separator2)
+        # Add chat tab
+        self.tabs.addTab(chat_tab, "Chat")
 
-        # Config section with modern collapsible style
-        cfg_lbl = QLabel("SETTINGS")
+        # === SETTINGS TAB ===
+        settings_tab = QWidget()
+        settings_layout = QVBoxLayout(settings_tab)
+        settings_layout.setContentsMargins(0, 16, 0, 0)
+        settings_layout.setSpacing(16)
+
+        # Config section
+        cfg_lbl = QLabel("CONFIGURATION")
         cfg_lbl.setObjectName("sectionLabel")
-        content.addWidget(cfg_lbl)
+        settings_layout.addWidget(cfg_lbl)
 
         # API Key with save button
         cfg_form_h = QHBoxLayout()
@@ -411,7 +424,7 @@ class OverlayWindow(QWidget):
         self.save_cfg_btn.setFixedHeight(38)
         self.save_cfg_btn.setFixedWidth(75)
         cfg_form_h.addWidget(self.save_cfg_btn)
-        content.addLayout(cfg_form_h)
+        settings_layout.addLayout(cfg_form_h)
 
         # Interval spinner with modern styling
         interval_h = QHBoxLayout()
@@ -429,7 +442,7 @@ class OverlayWindow(QWidget):
         self.interval_spin.setFixedWidth(125)
         interval_h.addWidget(self.interval_spin)
         interval_h.addStretch()
-        content.addLayout(interval_h)
+        settings_layout.addLayout(interval_h)
 
         # Watch directories with modern list
         watch_header = QHBoxLayout()
@@ -438,14 +451,14 @@ class OverlayWindow(QWidget):
         watch_lbl.setObjectName("sectionLabel")
         watch_header.addWidget(watch_lbl)
         watch_header.addStretch()
-        content.addLayout(watch_header)
+        settings_layout.addLayout(watch_header)
 
         self.watch_list = QListWidget()
         self.watch_list.setObjectName("modernList")
         self.watch_list.setFixedHeight(70)
         for d in self.config.get("watch_dirs", []):
             self.watch_list.addItem(QListWidgetItem(d))
-        content.addWidget(self.watch_list)
+        settings_layout.addWidget(self.watch_list)
 
         watch_btn_h = QHBoxLayout()
         watch_btn_h.setSpacing(10)
@@ -463,14 +476,21 @@ class OverlayWindow(QWidget):
         remove_dir_btn.clicked.connect(self.on_remove_dir)
         remove_dir_btn.setFixedHeight(36)
         watch_btn_h.addWidget(remove_dir_btn)
-        content.addLayout(watch_btn_h)
-        
-        # Log area with compact design
+        settings_layout.addLayout(watch_btn_h)
+
+        # Log area
+        log_lbl = QLabel("ACTIVITY LOG")
+        log_lbl.setObjectName("sectionLabel")
+        settings_layout.addWidget(log_lbl)
+
         self.log_area = QTextEdit()
         self.log_area.setObjectName("modernTextArea")
         self.log_area.setReadOnly(True)
-        self.log_area.setFixedHeight(70)
-        content.addWidget(self.log_area)
+        settings_layout.addWidget(self.log_area)
+        settings_layout.addStretch()
+
+        # Add settings tab
+        self.tabs.addTab(settings_tab, "Settings")
 
         container.setLayout(content)
         root.addWidget(container)
@@ -715,6 +735,35 @@ class OverlayWindow(QWidget):
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 height: 0px;
             }
+
+            /* Tab Widget */
+            QTabWidget::pane {
+                border: none;
+                background: transparent;
+                margin-top: 0px;
+            }
+
+            QTabBar::tab {
+                background: rgba(255, 255, 255, 0.04);
+                color: #71717A;
+                border: none;
+                border-radius: 10px 10px 0 0;
+                padding: 12px 24px;
+                margin-right: 4px;
+                font-size: 12px;
+                font-weight: 600;
+                letter-spacing: 0.3px;
+            }
+
+            QTabBar::tab:selected {
+                background: rgba(255, 255, 255, 0.08);
+                color: #FAFAFA;
+            }
+
+            QTabBar::tab:hover:!selected {
+                background: rgba(255, 255, 255, 0.06);
+                color: #A1A1AA;
+            }
         """)
 
     def on_add_dir(self):
@@ -785,7 +834,7 @@ class OverlayWindow(QWidget):
 
     def append_response(self, text: str):
         ts = time.strftime("%H:%M:%S")
-        self.response_area.append(f"<div style='margin-bottom: 10px;'><span style='color: #71717A; font-size: 10px;'>[{ts}]</span><br><span style='color: #FAFAFA;'>{text}</span></div>")
+        self.response_area.append(f"<div style='margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.04);'><span style='color: #71717A; font-size: 10px;'>[{ts}]</span><br><span style='color: #FAFAFA; line-height: 1.6; margin-top: 4px; display: block;'>{text}</span></div>")
 
     def toggle_visibility(self):
         if self.isVisible():
