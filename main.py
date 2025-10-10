@@ -374,7 +374,7 @@ class OverlayWindow(QWidget):
         # Response display with header
         resp_header = QHBoxLayout()
         resp_header.setSpacing(0)
-        resp_lbl = QLabel("RESPONSES")
+        resp_lbl = QLabel("")
         resp_lbl.setObjectName("sectionLabel")
         resp_header.addWidget(resp_lbl)
         resp_header.addStretch()
