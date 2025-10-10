@@ -464,15 +464,8 @@ class OverlayWindow(QWidget):
         remove_dir_btn.setFixedHeight(36)
         watch_btn_h.addWidget(remove_dir_btn)
         content.addLayout(watch_btn_h)
-
+        
         # Log area with compact design
-        log_header = QHBoxLayout()
-        log_header.setSpacing(0)
-        log_lbl = QLabel("ACTIVITY LOG")
-        log_lbl.setObjectName("sectionLabel")
-        log_header.addWidget(log_lbl)
-        content.addLayout(log_header)
-
         self.log_area = QTextEdit()
         self.log_area.setObjectName("modernTextArea")
         self.log_area.setReadOnly(True)
@@ -528,7 +521,7 @@ class OverlayWindow(QWidget):
                 text-transform: uppercase;
                 letter-spacing: 1.3px;
                 margin: 0;
-                padding: 0;
+                padding: 20px 0 0 0;
             }
 
             #fieldLabel {
