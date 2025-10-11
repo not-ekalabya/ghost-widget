@@ -13,11 +13,12 @@ import re
 from typing import List, Dict, Any
 import io
 import numpy as np
+import pyperclip  # For clipboard operations
 
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3):
+    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt"):
         """
-        Initialize the background companion with RAG support
+        Initialize the background companion with RAG support and autonomous content generation
         
         Args:
             api_key: Google Gemini API key
@@ -25,6 +26,9 @@ class BackgroundCompanion:
             db_path: Path to SQLite database
             watch_dirs: List of directories to watch for file context
             always_recent: Number of most recent contexts to always include (default: 3)
+            autonomous_mode: Whether to run in autonomous mode
+            autonomous_interval: Seconds between autonomous content generation
+            autonomous_output: File path for autonomous content
         """
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
@@ -35,6 +39,11 @@ class BackgroundCompanion:
         self.screenshot_dir.mkdir(exist_ok=True)
         self.watch_dirs = watch_dirs or []
         self.always_recent = always_recent
+        self.autonomous_mode = autonomous_mode
+        self.autonomous_interval = autonomous_interval
+        self.autonomous_output = Path(autonomous_output)
+        self.last_autonomous_check = 0
+        self.last_screen_content = ""
         
         # Initialize database
         self._init_database()
@@ -58,16 +67,24 @@ class BackgroundCompanion:
                 open_applications TEXT,
                 tags TEXT,
                 embedding BLOB,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                screen_text TEXT
             )
         ''')
         
-        # Migrate existing database: add embedding column if it doesn't exist
+        # Migrate existing database: add embedding and screen_text columns if they don't exist
         try:
             cursor.execute("SELECT embedding FROM context_snapshots LIMIT 1")
         except sqlite3.OperationalError:
             print("Migrating database: adding embedding column...")
             cursor.execute("ALTER TABLE context_snapshots ADD COLUMN embedding BLOB")
+            print("✅ Database migration complete!")
+        
+        try:
+            cursor.execute("SELECT screen_text FROM context_snapshots LIMIT 1")
+        except sqlite3.OperationalError:
+            print("Migrating database: adding screen_text column...")
+            cursor.execute("ALTER TABLE context_snapshots ADD COLUMN screen_text TEXT")
             print("✅ Database migration complete!")
         
         conn.commit()
@@ -267,6 +284,31 @@ class BackgroundCompanion:
         # Return just the paths for storage, limited to 30
         return [f['path'] for f in recent_files[:30]]
     
+    def _extract_screen_text(self, screenshot_path):
+        """Extract text content from screenshot using Gemini vision"""
+        try:
+            with open(screenshot_path, 'rb') as f:
+                image_data = f.read()
+            
+            prompt = """Extract ALL visible text from this screenshot. Focus on:
+1. Main content text (articles, documents, code, etc.)
+2. UI elements and labels
+3. Headings and titles
+4. Any partially written text or drafts
+5. Input fields and text areas
+
+Return ONLY the extracted text, organized by sections if visible. Be comprehensive."""
+            
+            response = self.model.generate_content([
+                prompt,
+                {"mime_type": "image/png", "data": image_data}
+            ])
+            
+            return response.text
+        except Exception as e:
+            print(f"Error extracting screen text: {e}")
+            return ""
+    
     def _analyze_screenshot(self, screenshot_path, active_context):
         """Analyze screenshot using Gemini"""
         try:
@@ -309,24 +351,25 @@ Be thorough and specific. This will be used for context retrieval later."""
             print(f"Error analyzing screenshot: {e}")
             return f"Error analyzing: {str(e)}"
     
-    def _store_context(self, screenshot_path, description, active_context):
+    def _store_context(self, screenshot_path, description, active_context, screen_text=""):
         """Store context in database with embedding"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Generate embedding for the description
+        # Generate embedding for the description + screen text
+        embedding_content = description + "\n\nScreen Text:\n" + screen_text
         print("Generating embedding...")
-        embedding = self._generate_embedding(description)
+        embedding = self._generate_embedding(embedding_content)
         embedding_blob = None
         if embedding:
             embedding_blob = json.dumps(embedding).encode('utf-8')
         
         cursor.execute('''
             INSERT INTO context_snapshots 
-            (timestamp, screenshot_path, description, active_files, open_applications, embedding, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (timestamp, screenshot_path, description, active_files, open_applications, embedding, created_at, screen_text)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             timestamp, 
             screenshot_path, 
@@ -334,7 +377,8 @@ Be thorough and specific. This will be used for context retrieval later."""
             json.dumps(active_context['files']),
             json.dumps(active_context['applications']),
             embedding_blob,
-            timestamp
+            timestamp,
+            screen_text
         ))
         
         conn.commit()
@@ -348,18 +392,18 @@ Be thorough and specific. This will be used for context retrieval later."""
         Always includes the last N recent contexts plus semantically similar ones
         
         Args:
-            query: The user's question
+            query: The user's question or current screen content
             top_k: Total number of contexts to retrieve (including always_recent)
         
         Returns:
-            List of (id, timestamp, description, active_files, open_applications, similarity_score) tuples
+            List of (id, timestamp, description, active_files, open_applications, screen_text, similarity_score) tuples
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         # Get the most recent N contexts (always included)
         cursor.execute('''
-            SELECT id, timestamp, description, active_files, open_applications, embedding
+            SELECT id, timestamp, description, active_files, open_applications, embedding, screen_text
             FROM context_snapshots 
             ORDER BY created_at DESC 
             LIMIT ?
@@ -370,7 +414,7 @@ Be thorough and specific. This will be used for context retrieval later."""
         
         # Get all contexts with embeddings for similarity search
         cursor.execute('''
-            SELECT id, timestamp, description, active_files, open_applications, embedding
+            SELECT id, timestamp, description, active_files, open_applications, embedding, screen_text
             FROM context_snapshots 
             WHERE embedding IS NOT NULL
             ORDER BY created_at DESC
@@ -383,35 +427,34 @@ Be thorough and specific. This will be used for context retrieval later."""
             return []
         
         # Generate embedding for the query
-        print("Generating query embedding...")
         query_embedding = self._generate_embedding(query)
         
         if not query_embedding:
             print("Warning: Could not generate query embedding, using only recent contexts")
-            return [(ctx[0], ctx[1], ctx[2], ctx[3], ctx[4], 1.0) for ctx in recent_contexts]
+            return [(ctx[0], ctx[1], ctx[2], ctx[3], ctx[4], ctx[6], 1.0) for ctx in recent_contexts]
         
         # Calculate similarity scores for all contexts
         scored_contexts = []
         for ctx in all_contexts:
-            ctx_id, timestamp, description, active_files, open_applications, embedding_blob = ctx
+            ctx_id, timestamp, description, active_files, open_applications, embedding_blob, screen_text = ctx
             
             if embedding_blob:
                 try:
                     embedding = json.loads(embedding_blob.decode('utf-8'))
                     similarity = self._cosine_similarity(query_embedding, embedding)
-                    scored_contexts.append((ctx_id, timestamp, description, active_files, open_applications, similarity))
+                    scored_contexts.append((ctx_id, timestamp, description, active_files, open_applications, screen_text or "", similarity))
                 except Exception as e:
                     print(f"Error processing embedding for context {ctx_id}: {e}")
         
         # Sort by similarity (descending)
-        scored_contexts.sort(key=lambda x: x[5], reverse=True)
+        scored_contexts.sort(key=lambda x: x[6], reverse=True)
         
         # Combine: always include recent contexts, then add most similar ones
         result = []
         
         # Add recent contexts first (with score 1.0 to indicate they're always included)
         for ctx in recent_contexts:
-            result.append((ctx[0], ctx[1], ctx[2], ctx[3], ctx[4], 1.0))
+            result.append((ctx[0], ctx[1], ctx[2], ctx[3], ctx[4], ctx[6] or "", 1.0))
         
         # Add most similar contexts (excluding those already in recent)
         remaining_slots = top_k - len(recent_contexts)
@@ -419,11 +462,174 @@ Be thorough and specific. This will be used for context retrieval later."""
             if ctx[0] not in recent_ids and len(result) < top_k:
                 result.append(ctx)
         
-        print(f"\nRetrieved {len(result)} contexts:")
-        print(f"  - {len(recent_contexts)} most recent (always included)")
-        print(f"  - {len(result) - len(recent_contexts)} semantically similar")
-        
         return result
+    
+    def _generate_autonomous_content(self):
+        """Generate proactive content based on current screen activity"""
+        try:
+            # Capture current screenshot for analysis
+            screenshot_path = self._capture_screenshot()
+            if not screenshot_path:
+                print("Could not capture screenshot for content generation")
+                return
+            
+            with open(screenshot_path, 'rb') as f:
+                image_data = f.read()
+            
+            # Extract text from current screen
+            current_screen_text = self._extract_screen_text(screenshot_path)
+            
+            # Check if screen content has changed significantly
+            if self._is_similar_content(self.last_screen_content, current_screen_text):
+                print("Screen content hasn't changed significantly, skipping content generation")
+                return
+            
+            self.last_screen_content = current_screen_text
+            
+            # Retrieve relevant context based on current screen content
+            relevant_contexts = self._retrieve_relevant_contexts(current_screen_text, top_k=5)
+            
+            # Build context string
+            context_parts = []
+            all_files = set()
+            
+            for ctx_id, timestamp, desc, files_json, apps_json, screen_text, similarity in relevant_contexts:
+                context_parts.append(f"[Past Context - {timestamp}]\n{desc}")
+                if screen_text:
+                    context_parts.append(f"Previous Screen Text:\n{screen_text[:500]}")
+                
+                if files_json:
+                    try:
+                        files = json.loads(files_json)
+                        all_files.update(files)
+                    except:
+                        pass
+            
+            context_str = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant past context"
+            
+            # Create content generation prompt
+            prompt = f"""You are an AI companion that generates useful content based on what the user is currently doing on screen.
+
+CURRENT SCREEN CONTENT:
+{current_screen_text}
+
+RELEVANT PAST CONTEXT:
+{context_str}
+
+RELEVANT FILES:
+{', '.join(list(all_files)[:10]) if all_files else 'None'}
+
+YOUR TASK:
+Analyze the current screen and generate appropriate content:
+
+1. IF on an AI chatbot/assistant website (ChatGPT, Claude, Gemini, etc.):
+   - Generate a well-crafted prompt for the AI based on what you see
+   - Make it specific and contextual to their apparent goal
+
+2. IF writing a document with just a heading/title:
+   - Generate the full content for that section
+   - Match the tone and style of existing content
+   - Use relevant information from past contexts
+
+3. IF coding with comments/function stubs:
+   - Generate the complete implementation
+   - Follow best practices and existing code style
+
+4. IF on a blank document/editor:
+   - Suggest relevant content based on recent activity
+   - Provide a starter template or outline
+
+5. IF researching/reading:
+   - Summarize key points
+   - Generate related questions or next steps
+
+6. OTHERWISE:
+   - Generate contextually relevant content that would be helpful
+   - Could be: draft text, code snippet, outline, summary, etc.
+
+IMPORTANT:
+- Be specific and actionable
+- Generate COMPLETE, READY-TO-USE content
+- Match the context and style
+- Keep it focused (200-400 words or equivalent)
+- Format appropriately (markdown, code blocks, etc.)
+
+Generate the content now:"""
+
+            # Generate content with vision
+            response = self.model.generate_content([
+                prompt,
+                {"mime_type": "image/png", "data": image_data}
+            ])
+            
+            generated_content = response.text
+            
+            # Detect content type
+            content_type = self._detect_content_type(current_screen_text, generated_content)
+            
+            # Write to file with timestamp and metadata
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(self.autonomous_output, 'a', encoding='utf-8') as f:
+                f.write(f"\n{'='*80}\n")
+                f.write(f"🤖 AUTONOMOUS CONTENT - {timestamp}\n")
+                f.write(f"📋 Type: {content_type}\n")
+                f.write(f"{'='*80}\n")
+                f.write(f"{generated_content}\n")
+                f.write(f"\n{'='*80}\n")
+            
+            # Also copy to clipboard for immediate use
+            try:
+                pyperclip.copy(generated_content)
+                clipboard_status = "✅ Copied to clipboard"
+            except:
+                clipboard_status = "❌ Could not copy to clipboard"
+            
+            print(f"\n{'='*80}")
+            print(f"🤖 AUTONOMOUS CONTENT GENERATED - {timestamp}")
+            print(f"📋 Type: {content_type}")
+            print(f"{'='*80}")
+            print(generated_content[:300] + "..." if len(generated_content) > 300 else generated_content)
+            print(f"{'='*80}\n")
+            print(f"💾 Saved to: {self.autonomous_output}")
+            print(f"📋 {clipboard_status}")
+            
+        except Exception as e:
+            import traceback
+            print(f"Error generating autonomous content: {e}")
+            print(traceback.format_exc())
+    
+    def _is_similar_content(self, old_text: str, new_text: str) -> bool:
+        """Check if two text contents are similar enough to skip generation"""
+        if not old_text or not new_text:
+            return False
+        
+        # Simple similarity check based on length and overlap
+        if abs(len(old_text) - len(new_text)) < 50:  # Less than 50 chars difference
+            # Check for significant overlap
+            old_words = set(old_text.lower().split())
+            new_words = set(new_text.lower().split())
+            
+            if len(old_words) > 0 and len(new_words) > 0:
+                overlap = len(old_words & new_words) / len(old_words | new_words)
+                return overlap > 0.8  # 80% similarity threshold
+        
+        return False
+    
+    def _detect_content_type(self, screen_text: str, generated_content: str) -> str:
+        """Detect what type of content was generated"""
+        screen_lower = screen_text.lower()
+        content_lower = generated_content.lower()
+        
+        if any(keyword in screen_lower for keyword in ['chatgpt', 'claude', 'gemini', 'copilot', 'chat']):
+            return "AI Prompt"
+        elif '```' in generated_content or 'def ' in content_lower or 'function' in content_lower:
+            return "Code"
+        elif any(keyword in screen_lower for keyword in ['document', 'word', 'docs', 'write']):
+            return "Document Content"
+        elif '#' in generated_content[:100] or any(heading in content_lower[:200] for heading in ['introduction', 'overview', 'summary']):
+            return "Article/Blog"
+        else:
+            return "General Content"
     
     # Tool execution methods
     def read_file(self, file_path: str) -> str:
@@ -766,6 +972,10 @@ Be comprehensive and extract all text and information."""
         """Main capture loop"""
         print(f"Background companion started. Capturing every {self.capture_interval} seconds.")
         print(f"Watching directories: {self.watch_dirs}")
+        if self.autonomous_mode:
+            print(f"🤖 AUTONOMOUS MODE ENABLED - Generating content every {self.autonomous_interval} seconds")
+            print(f"📝 Content will be written to: {self.autonomous_output}")
+            print(f"📋 Content will be automatically copied to clipboard")
         print("Press Ctrl+C to stop.")
         
         while self.running:
@@ -777,12 +987,23 @@ Be comprehensive and extract all text and information."""
                 screenshot_path = self._capture_screenshot()
                 
                 if screenshot_path:
+                    # Extract screen text first
+                    screen_text = self._extract_screen_text(screenshot_path)
+                    
                     # Analyze with Gemini
                     print(f"Analyzing screenshot: {screenshot_path}")
                     description = self._analyze_screenshot(screenshot_path, active_context)
                     
-                    # Store in database
-                    self._store_context(screenshot_path, description, active_context)
+                    # Store in database with screen text
+                    self._store_context(screenshot_path, description, active_context, screen_text)
+                    
+                    # Autonomous content generation
+                    if self.autonomous_mode:
+                        current_time = time.time()
+                        if current_time - self.last_autonomous_check >= self.autonomous_interval:
+                            print("\n🤖 Generating autonomous content...")
+                            self._generate_autonomous_content()
+                            self.last_autonomous_check = current_time
                 
                 # Wait for next capture
                 time.sleep(self.capture_interval)
@@ -841,12 +1062,15 @@ Be comprehensive and extract all text and information."""
         all_files = set()
         
         print("\n📊 Retrieved contexts:")
-        for idx, (ctx_id, timestamp, desc, files_json, apps_json, similarity) in enumerate(relevant_contexts, 1):
+        for idx, (ctx_id, timestamp, desc, files_json, apps_json, screen_text, similarity) in enumerate(relevant_contexts, 1):
             # Indicate if this is a recent context (always included)
             marker = "📌 RECENT" if similarity == 1.0 else f"🎯 {similarity:.3f}"
             print(f"  {idx}. [{marker}] {timestamp}")
             
             context_parts.append(f"[Context {idx} - {timestamp} - Relevance: {marker}]\n{desc}")
+            
+            if screen_text:
+                context_parts.append(f"Screen Text:\n{screen_text[:500]}")
             
             if files_json:
                 try:
@@ -1014,7 +1238,7 @@ Provide a detailed answer. If you need to access files to answer better, use the
         
         # Get contexts without embeddings
         cursor.execute('''
-            SELECT id, description
+            SELECT id, description, screen_text
             FROM context_snapshots 
             WHERE embedding IS NULL
         ''')
@@ -1028,10 +1252,11 @@ Provide a detailed answer. If you need to access files to answer better, use the
         
         print(f"Generating embeddings for {len(contexts_to_index)} contexts...")
         
-        for idx, (ctx_id, description) in enumerate(contexts_to_index, 1):
+        for idx, (ctx_id, description, screen_text) in enumerate(contexts_to_index, 1):
             print(f"Processing {idx}/{len(contexts_to_index)}...", end='\r')
             
-            embedding = self._generate_embedding(description)
+            embedding_content = description + "\n\nScreen Text:\n" + (screen_text or "")
+            embedding = self._generate_embedding(embedding_content)
             if embedding:
                 embedding_blob = json.dumps(embedding).encode('utf-8')
                 cursor.execute('''
@@ -1049,9 +1274,9 @@ Provide a detailed answer. If you need to access files to answer better, use the
 
 
 def main():
-    parser = argparse.ArgumentParser(description='AI Background Companion with RAG-based Context Retrieval')
-    parser.add_argument('mode', choices=['capture', 'query', 'list', 'reindex'], 
-                       help='Mode: capture, query, list, or reindex')
+    parser = argparse.ArgumentParser(description='AI Background Companion with Content Generation and RAG-based Context Retrieval')
+    parser.add_argument('mode', choices=['capture', 'query', 'list', 'reindex', 'autonomous'], 
+                       help='Mode: capture, query, list, reindex, or autonomous')
     parser.add_argument('--api-key', required=True, help='Google Gemini API key')
     parser.add_argument('--interval', type=int, default=60, 
                        help='Capture interval in seconds (default: 60)')
@@ -1062,6 +1287,10 @@ def main():
                        help='Number of recent items to show (for list mode)')
     parser.add_argument('--always-recent', type=int, default=3,
                        help='Number of most recent contexts to always include in retrieval (default: 3)')
+    parser.add_argument('--autonomous-interval', type=int, default=180,
+                       help='Interval in seconds for autonomous content generation (default: 180 = 3 minutes)')
+    parser.add_argument('--autonomous-output', type=str, default='autonomous_content.txt',
+                       help='File to write autonomous content to (default: autonomous_content.txt)')
     
     args = parser.parse_args()
     
@@ -1074,10 +1303,29 @@ def main():
         api_key=args.api_key,
         capture_interval=args.interval,
         watch_dirs=watch_dirs,
-        always_recent=args.always_recent
+        always_recent=args.always_recent,
+        autonomous_mode=(args.mode == 'autonomous'),
+        autonomous_interval=args.autonomous_interval,
+        autonomous_output=args.autonomous_output
     )
     
     if args.mode == 'capture':
+        companion.start()
+    elif args.mode == 'autonomous':
+        print("\n" + "="*80)
+        print("🤖 AUTONOMOUS CONTENT GENERATION MODE")
+        print("="*80)
+        print("The AI will:")
+        print("  • Extract and analyze text from your screen")
+        print("  • Generate contextual content based on what you're doing")
+        print("  • Auto-copy generated content to clipboard")
+        print("  • Save all content to file with timestamps")
+        print("\nContent Types:")
+        print("  • AI Prompts (when on ChatGPT, Claude, etc.)")
+        print("  • Document content (when writing with headings)")
+        print("  • Code implementations (when coding)")
+        print("  • Summaries and outlines (when researching)")
+        print("="*80 + "\n")
         companion.start()
     elif args.mode == 'query':
         if not args.question:
