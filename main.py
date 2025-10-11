@@ -44,7 +44,7 @@ try:
         QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
         QGraphicsDropShadowEffect, QTabWidget
     )
-    from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve
+    from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
     from PyQt6.QtGui import QFont, QAction, QColor
     USE_PYQT6 = True
 except Exception:
@@ -54,7 +54,7 @@ except Exception:
             QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
             QGraphicsDropShadowEffect, QTabWidget
         )
-        from PyQt5.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve
+        from PyQt5.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
         from PyQt5.QtGui import QFont, QAction, QColor
     except Exception:
         raise RuntimeError("PyQt6 or PyQt5 is required. Install with `pip install PyQt6` or `pip install PyQt5`")
@@ -129,6 +129,30 @@ def convert_markdown_to_html(text):
         html = html.replace('\n', '<br>')
 
     return html
+
+class MarkdownTextEdit(QTextEdit):
+    """Custom QTextEdit that preserves markdown format when copying."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.markdown_content = []  # Store markdown text for each message
+
+    def add_markdown_message(self, markdown_text, html_text):
+        """Add a message with both markdown and HTML versions."""
+        self.markdown_content.append(markdown_text)
+        self.append(html_text)
+
+    def clear_messages(self):
+        """Clear all messages."""
+        self.markdown_content = []
+        self.clear()
+
+    def createMimeData(self):
+        """Override to provide markdown text when copying."""
+        mime = QMimeData()
+        # Provide the full markdown content as plain text
+        markdown_text = "\n\n---\n\n".join(self.markdown_content)
+        mime.setText(markdown_text)
+        return mime
 
 def hotkey_listener():
     """Global hotkey listener thread that sends toggle events."""
@@ -462,7 +486,7 @@ class OverlayWindow(QWidget):
         resp_header.addWidget(self.clear_resp_btn)
         content.addLayout(resp_header)
 
-        self.response_area = QTextEdit()
+        self.response_area = MarkdownTextEdit()
         self.response_area.setObjectName("modernTextArea")
         self.response_area.setReadOnly(True)
         chat_layout.addWidget(self.response_area)
@@ -909,14 +933,22 @@ class OverlayWindow(QWidget):
 
     def append_response(self, text: str):
         ts = time.strftime("%H:%M:%S")
-        # Convert markdown to HTML
+        # Convert markdown to HTML for display
         html_content = convert_markdown_to_html(text)
-        self.response_area.append(
+
+        # Create formatted HTML for display
+        html_display = (
             f"<div style='margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.04);'>"
             f"<span style='color: #71717A; font-size: 10px; font-weight: 500;'>[{ts}]</span>"
             f"<div style='color: #FAFAFA; line-height: 1.6; margin-top: 8px;'>{html_content}</div>"
             f"</div>"
         )
+
+        # Store original markdown with timestamp
+        markdown_with_ts = f"[{ts}]\n{text}"
+
+        # Add both versions to the custom text edit
+        self.response_area.add_markdown_message(markdown_with_ts, html_display)
 
     def toggle_visibility(self):
         if self.isVisible():
