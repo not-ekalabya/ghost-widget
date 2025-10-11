@@ -15,16 +15,17 @@ import io
 import numpy as np
 
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3):
+    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False):
         """
         Initialize the background companion with RAG support
-        
+
         Args:
             api_key: Google Gemini API key
             capture_interval: Seconds between screenshots (default: 60)
             db_path: Path to SQLite database
             watch_dirs: List of directories to watch for file context
             always_recent: Number of most recent contexts to always include (default: 3)
+            autonomous_mode: Enable autonomous content generation (default: False)
         """
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
@@ -35,18 +36,24 @@ class BackgroundCompanion:
         self.screenshot_dir.mkdir(exist_ok=True)
         self.watch_dirs = watch_dirs or []
         self.always_recent = always_recent
-        
+        self.autonomous_mode = autonomous_mode
+        self.autonomous_callback = None
+
         # Initialize database
         self._init_database()
-        
+
         # Define available tools for Gemini
         self.tools = self._define_tools()
     
+    def set_autonomous_callback(self, callback):
+        """Set callback function for autonomous insights"""
+        self.autonomous_callback = callback
+
     def _init_database(self):
         """Create database schema with embeddings support"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS context_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,16 +65,25 @@ class BackgroundCompanion:
                 open_applications TEXT,
                 tags TEXT,
                 embedding BLOB,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                autonomous_insight TEXT
             )
         ''')
-        
+
         # Migrate existing database: add embedding column if it doesn't exist
         try:
             cursor.execute("SELECT embedding FROM context_snapshots LIMIT 1")
         except sqlite3.OperationalError:
             print("Migrating database: adding embedding column...")
             cursor.execute("ALTER TABLE context_snapshots ADD COLUMN embedding BLOB")
+            print("✅ Database migration complete!")
+
+        # Migrate: add autonomous_insight column if it doesn't exist
+        try:
+            cursor.execute("SELECT autonomous_insight FROM context_snapshots LIMIT 1")
+        except sqlite3.OperationalError:
+            print("Migrating database: adding autonomous_insight column...")
+            cursor.execute("ALTER TABLE context_snapshots ADD COLUMN autonomous_insight TEXT")
             print("✅ Database migration complete!")
         
         conn.commit()
@@ -298,13 +314,45 @@ Provide:
 6. Suggested tags for categorization
 
 Be thorough and specific. This will be used for context retrieval later."""
-            
+            else:
+                prompt = f"""Analyze this screenshot and proactively provide helpful insights.
+
+Additional Context:
+{context_info}
+
+Your task:
+1. Identify what the user is working on
+2. Assess their potential needs or challenges
+3. Provide actionable insights, tips, or suggestions that would be helpful RIGHT NOW
+4. If they're coding, offer relevant code snippets or best practices
+5. If they're writing, suggest improvements or relevant information
+6. If they're researching, provide summarized insights or additional context
+7. If they're designing, offer design principles or feedback
+
+Be specific, actionable, and contextual. Format your response in markdown.
+
+Also provide:
+- Brief summary of current activity
+- Tags for categorization
+"""
+
             response = self.model.generate_content([
                 prompt,
                 {"mime_type": "image/png", "data": image_data}
             ])
-            
-            return response.text
+
+            analysis = response.text
+
+            # In autonomous mode, trigger callback with insights
+            if self.autonomous_mode and self.autonomous_callback:
+                try:
+                    # Extract the actionable insights (everything before tags)
+                    insight_text = analysis.split('Tags:')[0].strip() if 'Tags:' in analysis else analysis
+                    self.autonomous_callback(insight_text)
+                except Exception as e:
+                    print(f"Error in autonomous callback: {e}")
+
+            return analysis
         except Exception as e:
             print(f"Error analyzing screenshot: {e}")
             return f"Error analyzing: {str(e)}"
@@ -313,28 +361,34 @@ Be thorough and specific. This will be used for context retrieval later."""
         """Store context in database with embedding"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         # Generate embedding for the description
         print("Generating embedding...")
         embedding = self._generate_embedding(description)
         embedding_blob = None
         if embedding:
             embedding_blob = json.dumps(embedding).encode('utf-8')
-        
+
+        # Store autonomous insight if in autonomous mode
+        autonomous_insight = None
+        if self.autonomous_mode:
+            autonomous_insight = description.split('Tags:')[0].strip() if 'Tags:' in description else description
+
         cursor.execute('''
-            INSERT INTO context_snapshots 
-            (timestamp, screenshot_path, description, active_files, open_applications, embedding, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO context_snapshots
+            (timestamp, screenshot_path, description, active_files, open_applications, embedding, created_at, autonomous_insight)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            timestamp, 
-            screenshot_path, 
-            description, 
+            timestamp,
+            screenshot_path,
+            description,
             json.dumps(active_context['files']),
             json.dumps(active_context['applications']),
             embedding_blob,
-            timestamp
+            timestamp,
+            autonomous_insight
         ))
         
         conn.commit()
