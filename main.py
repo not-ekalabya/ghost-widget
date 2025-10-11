@@ -42,7 +42,7 @@ try:
     from PyQt6.QtWidgets import (
         QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
         QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
-        QGraphicsDropShadowEffect, QTabWidget, QCheckBox
+        QGraphicsDropShadowEffect, QTabWidget
     )
     from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
     from PyQt6.QtGui import QFont, QAction, QColor
@@ -52,7 +52,7 @@ except Exception:
         from PyQt5.QtWidgets import (
             QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
             QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
-            QGraphicsDropShadowEffect, QTabWidget, QCheckBox
+            QGraphicsDropShadowEffect, QTabWidget
         )
         from PyQt5.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
         from PyQt5.QtGui import QFont, QAction, QColor
@@ -199,8 +199,7 @@ class CompanionRunner(threading.Thread):
             "api_key": HARD_CODED_API_KEY,
             "capture_interval": self.config.get("interval", 60),
             "watch_dirs": self.config.get("watch_dirs", []),
-            "always_recent": self.config.get("always_recent", 3),
-            "autonomous_mode": self.config.get("autonomous_mode", False)
+            "always_recent": self.config.get("always_recent", 3)
         }
 
         return BackgroundCompanion(**kwargs)
@@ -321,9 +320,6 @@ class CompanionRunner(threading.Thread):
                         setattr(self.companion, k, v)
                     except Exception:
                         pass
-            # Special handling for autonomous_mode
-            if 'autonomous_mode' in new_conf and hasattr(self.companion, 'autonomous_mode'):
-                self.companion.autonomous_mode = new_conf['autonomous_mode']
 
 
 # ---------- Qt UI components ----------
@@ -350,9 +346,6 @@ class OverlayWindow(QWidget):
         self.config = config
         self.runner = CompanionRunner(self.config)
         self.runner.start()  # instantiate companion immediately in thread (non-blocking)
-
-        # Set up autonomous callback
-        self._setup_autonomous_callback()
 
         self._drag_pos = None
         self._is_recording = False
@@ -549,21 +542,6 @@ class OverlayWindow(QWidget):
         interval_h.addWidget(self.interval_spin)
         interval_h.addStretch()
         settings_layout.addLayout(interval_h)
-
-        # Autonomous mode checkbox
-        auto_h = QHBoxLayout()
-        auto_h.setSpacing(12)
-        self.autonomous_check = QCheckBox("Autonomous Mode")
-        self.autonomous_check.setObjectName("modernCheckBox")
-        self.autonomous_check.setChecked(self.config.get("autonomous_mode", False))
-        self.autonomous_check.setToolTip("AI proactively generates insights based on screen content")
-        auto_h.addWidget(self.autonomous_check)
-
-        auto_help = QLabel("(AI proactively generates helpful insights)")
-        auto_help.setObjectName("helpText")
-        auto_h.addWidget(auto_help)
-        auto_h.addStretch()
-        settings_layout.addLayout(auto_h)
 
         # Watch directories with modern list
         watch_header = QHBoxLayout()
@@ -885,37 +863,6 @@ class OverlayWindow(QWidget):
                 background: rgba(255, 255, 255, 0.06);
                 color: #A1A1AA;
             }
-
-            /* Checkbox */
-            QCheckBox {
-                color: #FAFAFA;
-                font-size: 12px;
-                font-weight: 500;
-                spacing: 8px;
-            }
-
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 4px;
-                border: 2px solid rgba(255, 255, 255, 0.2);
-                background: rgba(255, 255, 255, 0.04);
-            }
-
-            QCheckBox::indicator:hover {
-                border-color: rgba(255, 255, 255, 0.3);
-                background: rgba(255, 255, 255, 0.06);
-            }
-
-            QCheckBox::indicator:checked {
-                background: #3B82F6;
-                border-color: #3B82F6;
-            }
-
-            #helpText {
-                color: #71717A;
-                font-size: 11px;
-            }
         """)
 
     def on_add_dir(self):
@@ -949,8 +896,7 @@ class OverlayWindow(QWidget):
             "api_key": self.api_key_edit.text().strip(),
             "interval": int(self.interval_spin.value()),
             "watch_dirs": watch_dirs,
-            "always_recent": self.config.get("always_recent", 3),
-            "autonomous_mode": self.autonomous_check.isChecked()
+            "always_recent": self.config.get("always_recent", 3)
         }
 
     def on_start_stop(self):
@@ -1029,23 +975,6 @@ class OverlayWindow(QWidget):
         super().mouseReleaseEvent(ev)
 
     # Polling queue from companion runner
-    def _setup_autonomous_callback(self):
-        """Set up callback for autonomous mode"""
-        def autonomous_callback(insight):
-            # Thread-safe way to send insights to UI
-            _from_companion_q.put(("AUTONOMOUS_INSIGHT", insight))
-
-        # Wait for companion to be ready, then set callback
-        def set_callback():
-            if self.runner and self.runner.companion:
-                if hasattr(self.runner.companion, 'set_autonomous_callback'):
-                    self.runner.companion.set_autonomous_callback(autonomous_callback)
-            else:
-                # Try again in 1 second
-                QTimer.singleShot(1000, set_callback)
-
-        QTimer.singleShot(1000, set_callback)
-
     def start_polling_companion_queue(self):
         self.poll_timer = QTimer()
         self.poll_timer.timeout.connect(self.poll_companion_queue)
@@ -1105,9 +1034,6 @@ class OverlayWindow(QWidget):
                 self.signals.log.emit("<span style='color: #EF4444;'>[ERROR]</span> " + str(payload))
             elif typ == "CONFIG_UPDATED":
                 self.signals.log.emit("<span style='color: #10B981;'>Companion config updated.</span>")
-            elif typ == "AUTONOMOUS_INSIGHT":
-                # Display autonomous insights in the response area
-                self.signals.response.emit(f"🤖 **Autonomous Insight**\n\n{payload}")
             else:
                 self.signals.log.emit(f"[{typ}] {payload}")
 
