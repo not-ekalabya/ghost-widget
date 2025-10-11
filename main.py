@@ -16,8 +16,17 @@ import os
 import json
 import threading
 import time
+import re
 from pathlib import Path
 from queue import Queue, Empty
+from html import escape
+
+# Try importing markdown library
+try:
+    import markdown
+    MARKDOWN_AVAILABLE = True
+except ImportError:
+    MARKDOWN_AVAILABLE = False
 
 # Import BackgroundCompanion from user's main.py (must be in same folder)
 try:
@@ -55,6 +64,71 @@ from pynput import keyboard
 HOTKEY_COMBO = "<ctrl>+<alt>+`"   # you can change this to whatever you want
 
 _hotkey_queue = Queue()
+
+def convert_markdown_to_html(text):
+    """Convert markdown text to HTML with proper styling."""
+    if MARKDOWN_AVAILABLE:
+        # Use markdown library if available
+        html = markdown.markdown(
+            text,
+            extensions=['fenced_code', 'codehilite', 'tables', 'nl2br']
+        )
+    else:
+        # Lightweight markdown converter
+        html = escape(text)
+
+        # Code blocks (```language\n...\n```)
+        html = re.sub(
+            r'```([\w]*)?\n([\s\S]*?)```',
+            r'<pre style="background: rgba(0,0,0,0.3); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0;"><code>\2</code></pre>',
+            html
+        )
+
+        # Inline code (`code`)
+        html = re.sub(
+            r'`([^`]+)`',
+            r'<code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px;">\1</code>',
+            html
+        )
+
+        # Headers
+        html = re.sub(r'^### (.+)$', r'<h3 style="color: #FAFAFA; font-size: 16px; font-weight: 600; margin: 12px 0 8px 0;">\1</h3>', html, flags=re.MULTILINE)
+        html = re.sub(r'^## (.+)$', r'<h2 style="color: #FAFAFA; font-size: 18px; font-weight: 600; margin: 14px 0 10px 0;">\1</h2>', html, flags=re.MULTILINE)
+        html = re.sub(r'^# (.+)$', r'<h1 style="color: #FAFAFA; font-size: 20px; font-weight: 700; margin: 16px 0 12px 0;">\1</h1>', html, flags=re.MULTILINE)
+
+        # Bold (**text** or __text__)
+        html = re.sub(r'\*\*(.+?)\*\*', r'<strong style="font-weight: 600; color: #FAFAFA;">\1</strong>', html)
+        html = re.sub(r'__(.+?)__', r'<strong style="font-weight: 600; color: #FAFAFA;">\1</strong>', html)
+
+        # Italic (*text* or _text_)
+        html = re.sub(r'\*(.+?)\*', r'<em style="font-style: italic; color: #E4E4E7;">\1</em>', html)
+        html = re.sub(r'_(.+?)_', r'<em style="font-style: italic; color: #E4E4E7;">\1</em>', html)
+
+        # Links [text](url)
+        html = re.sub(
+            r'\[([^\]]+)\]\(([^\)]+)\)',
+            r'<a href="\2" style="color: #60A5FA; text-decoration: underline;">\1</a>',
+            html
+        )
+
+        # Unordered lists
+        html = re.sub(r'^[\*\-] (.+)$', r'<li style="margin-left: 20px; margin-bottom: 4px;">\1</li>', html, flags=re.MULTILINE)
+
+        # Ordered lists
+        html = re.sub(r'^\d+\. (.+)$', r'<li style="margin-left: 20px; margin-bottom: 4px;">\1</li>', html, flags=re.MULTILINE)
+
+        # Blockquotes
+        html = re.sub(
+            r'^&gt; (.+)$',
+            r'<blockquote style="border-left: 3px solid rgba(255,255,255,0.2); padding-left: 12px; margin: 8px 0; color: #A1A1AA;">\1</blockquote>',
+            html,
+            flags=re.MULTILINE
+        )
+
+        # Line breaks
+        html = html.replace('\n', '<br>')
+
+    return html
 
 def hotkey_listener():
     """Global hotkey listener thread that sends toggle events."""
@@ -834,7 +908,14 @@ class OverlayWindow(QWidget):
 
     def append_response(self, text: str):
         ts = time.strftime("%H:%M:%S")
-        self.response_area.append(f"<div style='margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.04);'><span style='color: #71717A; font-size: 10px;'>[{ts}]</span><br><span style='color: #FAFAFA; line-height: 1.6; margin-top: 4px; display: block;'>{text}</span></div>")
+        # Convert markdown to HTML
+        html_content = convert_markdown_to_html(text)
+        self.response_area.append(
+            f"<div style='margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.04);'>"
+            f"<span style='color: #71717A; font-size: 10px; font-weight: 500;'>[{ts}]</span>"
+            f"<div style='color: #FAFAFA; line-height: 1.6; margin-top: 8px;'>{html_content}</div>"
+            f"</div>"
+        )
 
     def toggle_visibility(self):
         if self.isVisible():
