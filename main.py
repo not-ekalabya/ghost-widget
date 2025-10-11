@@ -272,8 +272,9 @@ class CompanionRunner(threading.Thread):
         for method_name in ("ask", "query", "ask_gemini", "send_prompt", "chat"):
             if hasattr(self.companion, method_name):
                 try:
-                    result = getattr(self.companion, method_name)(question)
-                    return result
+                        result = getattr(self.companion, method_name)(question)
+                        # If backend returns a structured response (dict with display+gemini_raw), forward it
+                        return result
                 except Exception as e:
                     return f"Error calling {method_name}(): {e}"
         # If companion exposes a 'client' or 'model' attribute, try to call it
