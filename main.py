@@ -16,8 +16,17 @@ import os
 import json
 import threading
 import time
+import re
 from pathlib import Path
 from queue import Queue, Empty
+from html import escape
+
+# Try importing markdown library
+try:
+    import markdown
+    MARKDOWN_AVAILABLE = True
+except ImportError:
+    MARKDOWN_AVAILABLE = False
 
 # Import BackgroundCompanion from user's main.py (must be in same folder)
 try:
@@ -35,7 +44,7 @@ try:
         QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
         QGraphicsDropShadowEffect, QTabWidget
     )
-    from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve
+    from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
     from PyQt6.QtGui import QFont, QAction, QColor
     USE_PYQT6 = True
 except Exception:
@@ -45,7 +54,7 @@ except Exception:
             QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
             QGraphicsDropShadowEffect, QTabWidget
         )
-        from PyQt5.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve
+        from PyQt5.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
         from PyQt5.QtGui import QFont, QAction, QColor
     except Exception:
         raise RuntimeError("PyQt6 or PyQt5 is required. Install with `pip install PyQt6` or `pip install PyQt5`")
@@ -55,6 +64,95 @@ from pynput import keyboard
 HOTKEY_COMBO = "<ctrl>+<alt>+`"   # you can change this to whatever you want
 
 _hotkey_queue = Queue()
+
+def convert_markdown_to_html(text):
+    """Convert markdown text to HTML with proper styling."""
+    if MARKDOWN_AVAILABLE:
+        # Use markdown library if available
+        html = markdown.markdown(
+            text,
+            extensions=['fenced_code', 'codehilite', 'tables', 'nl2br']
+        )
+    else:
+        # Lightweight markdown converter
+        html = escape(text)
+
+        # Code blocks (```language\n...\n```)
+        html = re.sub(
+            r'```([\w]*)?\n([\s\S]*?)```',
+            r'<pre style="background: rgba(0,0,0,0.3); padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0;"><code>\2</code></pre>',
+            html
+        )
+
+        # Inline code (`code`)
+        html = re.sub(
+            r'`([^`]+)`',
+            r'<code style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px;">\1</code>',
+            html
+        )
+
+        # Headers
+        html = re.sub(r'^### (.+)$', r'<h3 style="color: #FAFAFA; font-size: 16px; font-weight: 600; margin: 12px 0 8px 0;">\1</h3>', html, flags=re.MULTILINE)
+        html = re.sub(r'^## (.+)$', r'<h2 style="color: #FAFAFA; font-size: 18px; font-weight: 600; margin: 14px 0 10px 0;">\1</h2>', html, flags=re.MULTILINE)
+        html = re.sub(r'^# (.+)$', r'<h1 style="color: #FAFAFA; font-size: 20px; font-weight: 700; margin: 16px 0 12px 0;">\1</h1>', html, flags=re.MULTILINE)
+
+        # Bold (**text** or __text__)
+        html = re.sub(r'\*\*(.+?)\*\*', r'<strong style="font-weight: 600; color: #FAFAFA;">\1</strong>', html)
+        html = re.sub(r'__(.+?)__', r'<strong style="font-weight: 600; color: #FAFAFA;">\1</strong>', html)
+
+        # Italic (*text* or _text_)
+        html = re.sub(r'\*(.+?)\*', r'<em style="font-style: italic; color: #E4E4E7;">\1</em>', html)
+        html = re.sub(r'_(.+?)_', r'<em style="font-style: italic; color: #E4E4E7;">\1</em>', html)
+
+        # Links [text](url)
+        html = re.sub(
+            r'\[([^\]]+)\]\(([^\)]+)\)',
+            r'<a href="\2" style="color: #60A5FA; text-decoration: underline;">\1</a>',
+            html
+        )
+
+        # Unordered lists
+        html = re.sub(r'^[\*\-] (.+)$', r'<li style="margin-left: 20px; margin-bottom: 4px;">\1</li>', html, flags=re.MULTILINE)
+
+        # Ordered lists
+        html = re.sub(r'^\d+\. (.+)$', r'<li style="margin-left: 20px; margin-bottom: 4px;">\1</li>', html, flags=re.MULTILINE)
+
+        # Blockquotes
+        html = re.sub(
+            r'^&gt; (.+)$',
+            r'<blockquote style="border-left: 3px solid rgba(255,255,255,0.2); padding-left: 12px; margin: 8px 0; color: #A1A1AA;">\1</blockquote>',
+            html,
+            flags=re.MULTILINE
+        )
+
+        # Line breaks
+        html = html.replace('\n', '<br>')
+
+    return html
+
+class MarkdownTextEdit(QTextEdit):
+    """Custom QTextEdit that preserves markdown format when copying."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.markdown_content = []  # Store markdown text for each message
+
+    def add_markdown_message(self, markdown_text, html_text):
+        """Add a message with both markdown and HTML versions."""
+        self.markdown_content.append(markdown_text)
+        self.append(html_text)
+
+    def clear_messages(self):
+        """Clear all messages."""
+        self.markdown_content = []
+        self.clear()
+
+    def createMimeData(self):
+        """Override to provide markdown text when copying."""
+        mime = QMimeData()
+        # Provide the full markdown content as plain text
+        markdown_text = "\n\n---\n\n".join(self.markdown_content)
+        mime.setText(markdown_text)
+        return mime
 
 def hotkey_listener():
     """Global hotkey listener thread that sends toggle events."""
@@ -198,8 +296,9 @@ class CompanionRunner(threading.Thread):
         for method_name in ("ask", "query", "ask_gemini", "send_prompt", "chat"):
             if hasattr(self.companion, method_name):
                 try:
-                    result = getattr(self.companion, method_name)(question)
-                    return result
+                        result = getattr(self.companion, method_name)(question)
+                        # If backend returns a structured response (dict with display+gemini_raw), forward it
+                        return result
                 except Exception as e:
                     return f"Error calling {method_name}(): {e}"
         # If companion exposes a 'client' or 'model' attribute, try to call it
@@ -387,7 +486,7 @@ class OverlayWindow(QWidget):
         resp_header.addWidget(self.clear_resp_btn)
         content.addLayout(resp_header)
 
-        self.response_area = QTextEdit()
+        self.response_area = MarkdownTextEdit()
         self.response_area.setObjectName("modernTextArea")
         self.response_area.setReadOnly(True)
         chat_layout.addWidget(self.response_area)
@@ -834,7 +933,22 @@ class OverlayWindow(QWidget):
 
     def append_response(self, text: str):
         ts = time.strftime("%H:%M:%S")
-        self.response_area.append(f"<div style='margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.04);'><span style='color: #71717A; font-size: 10px;'>[{ts}]</span><br><span style='color: #FAFAFA; line-height: 1.6; margin-top: 4px; display: block;'>{text}</span></div>")
+        # Convert markdown to HTML for display
+        html_content = convert_markdown_to_html(text)
+
+        # Create formatted HTML for display
+        html_display = (
+            f"<div style='margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.04);'>"
+            f"<span style='color: #71717A; font-size: 10px; font-weight: 500;'>[{ts}]</span>"
+            f"<div style='color: #FAFAFA; line-height: 1.6; margin-top: 8px;'>{html_content}</div>"
+            f"</div>"
+        )
+
+        # Store original markdown with timestamp
+        markdown_with_ts = f"[{ts}]\n{text}"
+
+        # Add both versions to the custom text edit
+        self.response_area.add_markdown_message(markdown_with_ts, html_display)
 
     def toggle_visibility(self):
         if self.isVisible():
