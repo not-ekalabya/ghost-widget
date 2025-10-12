@@ -1129,6 +1129,7 @@ Both methods will give you the full content. Use read_file_with_vision for PDFs 
 
 User Question: {question}
 
+Always to read relevant files first to gather information before answering. If you need to read files, use the tools provided.
 Provide a detailed answer. If you need to access files to answer better, use the available tools with full file paths."""
         
         try:

@@ -36,29 +36,15 @@ except Exception as e:
     import traceback
     _import_error = traceback.format_exc()
 
-# Try PyQt6 then PyQt5
-USE_PYQT6 = False
-try:
-    from PyQt6.QtWidgets import (
-        QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-        QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
-        QGraphicsDropShadowEffect, QTabWidget
-    )
-    from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
-    from PyQt6.QtGui import QFont, QAction, QColor
-    USE_PYQT6 = True
-except Exception:
-    try:
-        from PyQt5.QtWidgets import (
-            QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-            QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
-            QGraphicsDropShadowEffect, QTabWidget
-        )
-        from PyQt5.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
-        from PyQt5.QtGui import QFont, QAction, QColor
-    except Exception:
-        raise RuntimeError("PyQt6 or PyQt5 is required. Install with `pip install PyQt6` or `pip install PyQt5`")
-    
+USE_PYQT6 = True
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
+    QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
+    QGraphicsDropShadowEffect, QTabWidget
+)
+from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
+from PyQt6.QtGui import QFont, QAction, QColor
+
 from pynput import keyboard
 
 HOTKEY_COMBO = "<ctrl>+<alt>+`"   # you can change this to whatever you want
