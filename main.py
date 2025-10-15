@@ -340,7 +340,7 @@ class OverlayWindow(QWidget):
         self.start_polling_companion_queue()
 
     def init_ui(self):
-        self.setWindowTitle("Background Companion")
+        self.setWindowTitle("Ghost Widget")
         # Visual sizing - compact for tabs
         self.setFixedSize(440, 580)
 
@@ -370,7 +370,7 @@ class OverlayWindow(QWidget):
         self.status_dot.setStyleSheet("color: #6B7280; font-size: 16px;")
         title_h.addWidget(self.status_dot)
 
-        title_lbl = QLabel("Background Companion")
+        title_lbl = QLabel("Ghost Widget")
         title_lbl.setObjectName("titleLabel")
         title_font = QFont()
         title_font.setPointSize(15)
