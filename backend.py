@@ -23,8 +23,16 @@ except ImportError:
     SUPERMEMORY_AVAILABLE = False
     print("Warning: supermemory package not installed. Install with: pip install --pre supermemory")
 
+# Google grounding for web search
+try:
+    from google.genai import types
+    GROUNDING_AVAILABLE = True
+except ImportError:
+    GROUNDING_AVAILABLE = False
+    print("Warning: Google genai library doesn't support grounding. Using fallback search.")
+
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", supermemory_api_key=None, use_supermemory=True):
+    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", supermemory_api_key=None, use_supermemory=True, progress_callback=None):
         """
         Initialize the background companion with RAG support and autonomous content generation
 
@@ -39,9 +47,11 @@ class BackgroundCompanion:
             autonomous_output: File path for autonomous content
             supermemory_api_key: Supermemory API key (optional, reads from SUPERMEMORY_API_KEY env var)
             use_supermemory: Whether to use Supermemory API for context retrieval (default: True)
+            progress_callback: Callback function for progress updates (for GUI)
         """
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self.api_key = api_key
         self.capture_interval = capture_interval
         self.db_path = db_path
         self.running = False
@@ -54,6 +64,7 @@ class BackgroundCompanion:
         self.autonomous_output = Path(autonomous_output)
         self.last_autonomous_check = 0
         self.last_screen_content = ""
+        self.progress_callback = progress_callback  # For GUI progress updates
 
         # Initialize Supermemory
         self.use_supermemory = use_supermemory and SUPERMEMORY_AVAILABLE
@@ -76,7 +87,15 @@ class BackgroundCompanion:
 
         # Define available tools for Gemini
         self.tools = self._define_tools()
-    
+
+    def _emit_progress(self, event_type: str, data: dict):
+        """Emit progress update to GUI if callback is set"""
+        if self.progress_callback:
+            try:
+                self.progress_callback(event_type, data)
+            except Exception as e:
+                print(f"Error in progress callback: {e}")
+
     def _init_database(self):
         """Create database schema with embeddings support"""
         conn = sqlite3.connect(self.db_path)
@@ -204,7 +223,21 @@ class BackgroundCompanion:
                             },
                             "required": ["hours"]
                         }
-                    }
+                    },
+                    {
+                        "name": "search_web",
+                        "description": "Search the web for current information, facts, news, or real-time data using Google Search. Use this when you need information that may not be in the captured contexts or when you need up-to-date information.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The search query (e.g., 'latest Python version', 'current weather in Tokyo', 'recent AI news')"
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    },
                 ]
             }
         ]
@@ -1122,7 +1155,84 @@ Be comprehensive and extract all text and information."""
             return json.dumps(recent_files, indent=2)
         except Exception as e:
             return f"Error getting recent files: {str(e)}"
-    
+
+    def search_web(self, query: str) -> str:
+        """
+        Search the web using Google's grounding feature via a separate Gemini instance
+
+        Args:
+            query: The search query
+
+        Returns:
+            JSON string with search results
+        """
+        try:
+            if not GROUNDING_AVAILABLE:
+                return json.dumps({
+                    "error": "Web search not available - Google genai grounding not supported",
+                    "query": query
+                })
+
+            # Import Google genai client for grounding
+            from google import genai as google_genai
+
+            # Create a separate client with grounding tool
+            client = google_genai.Client(api_key=self.api_key)
+
+            grounding_tool = types.Tool(
+                google_search=types.GoogleSearch()
+            )
+
+            config = types.GenerateContentConfig(
+                tools=[grounding_tool]
+            )
+
+            # Create a search prompt
+            search_prompt = f"""Search the web for: {query}
+
+Provide a comprehensive summary of the search results including:
+1. Key facts and information found
+2. Relevant dates, numbers, or statistics
+3. Multiple perspectives if applicable
+4. Sources of information
+
+Be detailed and informative."""
+
+            # Generate content with grounding
+            response = client.models.generate_content(
+                model="gemini-2.0-flash-exp",
+                contents=search_prompt,
+                config=config
+            )
+
+            # Extract text response
+            result_text = ""
+            if response and hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content') and candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            result_text += part.text
+
+            # Check for grounding metadata
+            grounding_metadata = None
+            if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
+                grounding_metadata = str(candidate.grounding_metadata)
+
+            return json.dumps({
+                "query": query,
+                "results": result_text,
+                "grounding_metadata": grounding_metadata,
+                "success": True
+            }, indent=2)
+
+        except Exception as e:
+            return json.dumps({
+                "error": f"Web search failed: {str(e)}",
+                "query": query,
+                "success": False
+            })
+
     def _execute_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Execute a tool and return the result"""
         tools = {
@@ -1131,9 +1241,10 @@ Be comprehensive and extract all text and information."""
             "list_directory": lambda: self.list_directory(args.get("directory_path", "")),
             "get_file_info": lambda: self.get_file_info(args.get("file_path", "")),
             "search_files": lambda: self.search_files(args.get("pattern", "")),
-            "get_recent_files": lambda: self.get_recent_files(args.get("hours", 1))
+            "get_recent_files": lambda: self.get_recent_files(args.get("hours", 1)),
+            "search_web": lambda: self.search_web(args.get("query", ""))
         }
-        
+
         if tool_name in tools:
             return tools[tool_name]()
         else:
@@ -1211,28 +1322,46 @@ Be comprehensive and extract all text and information."""
         """Query stored context using RAG-based retrieval with Gemini"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         # Check if we have any contexts
         cursor.execute('SELECT COUNT(*) FROM context_snapshots')
         count = cursor.fetchone()[0]
         conn.close()
-        
+
         if count == 0:
             return "No context stored yet. Start capturing first!"
-        
-        print(f"\n🔍 Searching through {count} stored contexts...")
-        
+
+        print(f"\n{'='*60}")
+        print("🤖 PROCESSING YOUR QUESTION")
+        print(f"{'='*60}")
+        print(f"\n🔍 Step 1: Searching through {count} stored contexts...")
+
+        # Emit progress: Memory search started
+        self._emit_progress("MEMORY_SEARCH", {
+            "status": "Searching",
+            "count": count
+        })
+
         # Use RAG to retrieve relevant contexts
         relevant_contexts = self._retrieve_relevant_contexts(question, top_k=10)
-        
+
         if not relevant_contexts:
             return "No relevant context found. Try capturing more activity!"
-        
+
         # Build context string with file information
         context_parts = []
         all_files = set()
-        
-        print("\n📊 Retrieved contexts:")
+
+        print(f"\n📊 Step 2: Retrieved {len(relevant_contexts)} relevant contexts:")
+        print(f"{'─'*60}")
+
+        # Emit progress: Memory retrieved
+        self._emit_progress("MEMORY_RETRIEVED", {
+            "status": "Retrieved",
+            "count": len(relevant_contexts),
+            "contexts": [(timestamp, similarity) for _, timestamp, _, _, _, _, similarity in relevant_contexts]
+        })
+
         for idx, (ctx_id, timestamp, desc, files_json, apps_json, screen_text, similarity) in enumerate(relevant_contexts, 1):
             # Indicate if this is a recent context (always included)
             marker = "📌 RECENT" if similarity == 1.0 else f"🎯 {similarity:.3f}"
@@ -1263,15 +1392,17 @@ Be comprehensive and extract all text and information."""
             context_str += files_summary
         
         # Create model with tools
+        # Note: Google's grounding tools cannot be combined with custom function calling
+        # We'll use the traditional model with function calling for file operations
         try:
             model_with_tools = genai.GenerativeModel(
-                'gemini-2.5-flash',
+                'gemini-flash-latest',
                 tools=self.tools
             )
         except Exception as e:
             print(f"Error creating model with tools: {e}")
             return f"Error creating model: {str(e)}"
-        
+
         # Initial prompt
         prompt = f"""Based on the following context captured from screen activity (retrieved using semantic search):
 
@@ -1284,66 +1415,144 @@ IMPORTANT CONTEXT RETRIEVAL INFO:
 - Contexts with "🎯 [score]" were retrieved based on semantic similarity to your question
 - Higher similarity scores (closer to 1.0) indicate more relevance
 
-You have access to file system tools. You can:
+You have access to the following tools:
+
+FILE SYSTEM TOOLS:
 - read_file_as_text: Read text-based files (code, documents, PDFs, Word docs, Excel, etc.) and get extracted text
 - read_file_with_vision: Use AI vision to analyze any file including images, PDFs, and complex documents
-- list_directory: List directory contents  
+- list_directory: List directory contents
 - get_file_info: Get file metadata
 - search_files: Search for files by pattern (e.g., "*.py", "config.*")
 - get_recent_files: Get recently modified files
 
-IMPORTANT: For Word documents (.docx), PDFs, and other complex documents, you can use EITHER:
-1. read_file_as_text - to get extracted text content
-2. read_file_with_vision - to send the file directly to Gemini for comprehensive analysis
+WEB SEARCH TOOL:
+- search_web: Search the web for current information, facts, news, or real-time data
+  Use this when you need:
+  * Current/recent information not in the captured contexts
+  * Up-to-date facts, statistics, or news
+  * Real-time data (weather, stock prices, etc.)
+  * Verification of information
 
-Both methods will give you the full content. Use read_file_with_vision for PDFs and documents where you want the most comprehensive extraction.
+IMPORTANT GUIDELINES:
+1. For Word documents (.docx), PDFs, and other complex documents, you can use EITHER:
+   - read_file_as_text: to get extracted text content
+   - read_file_with_vision: to send the file directly to Gemini for comprehensive analysis
 
-User Question: {question}
+2. Always read relevant files first to gather information before answering
+3. Use search_web when you need current information beyond the stored contexts
+4. Provide detailed, well-structured answers
+5. Use the available tools with full file paths
 
-Always to read relevant files first to gather information before answering. If you need to read files, use the tools provided.
-Provide a detailed answer. If you need to access files to answer better, use the available tools with full file paths."""
+User Question: {question}"""
         
         try:
             # Start chat with tools
-            print("\n💬 Processing with Gemini...")
+            print(f"\n{'─'*60}")
+            print("💬 Step 3: Processing with Gemini AI...")
+            print(f"{'─'*60}")
+
+            # Emit progress: AI processing
+            self._emit_progress("AI_PROCESSING", {
+                "status": "Processing"
+            })
+
+            # Use traditional model with function calling
             chat = model_with_tools.start_chat()
             response = chat.send_message(prompt)
-            
+
             # Handle function calls
             max_iterations = 10
             iteration = 0
-            
+            tool_execution_count = 0
+
             while iteration < max_iterations:
                 # Check if response is None or has no candidates
                 if not response or not hasattr(response, 'candidates') or not response.candidates:
-                    print("Warning: Empty response from model")
+                    print("⚠️ Warning: Empty response from model")
                     break
-                
+
                 # Get the first candidate
                 candidate = response.candidates[0]
                 if not hasattr(candidate, 'content') or not candidate.content:
                     break
-                
+
                 parts = candidate.content.parts
                 if not parts:
                     break
-                
+
                 # Check for function calls
                 function_calls = [part for part in parts if hasattr(part, 'function_call') and part.function_call]
-                
+
                 if not function_calls:
                     # No more function calls, we're done
                     break
-                
+
                 # Execute all function calls
+                if tool_execution_count == 0:
+                    print(f"\n{'─'*60}")
+                    print("🔧 Step 4: Executing tools to gather information...")
+                    print(f"{'─'*60}")
+
                 function_responses = []
                 for fc in function_calls:
                     tool_name = fc.function_call.name
                     tool_args = dict(fc.function_call.args)
-                    
-                    print(f"🔧 Executing tool: {tool_name} with args: {tool_args}")
+
+                    tool_execution_count += 1
+
+                    # Emit progress: Tool execution started
+                    self._emit_progress("TOOL_EXECUTE", {
+                        "tool_name": tool_name,
+                        "args": tool_args,
+                        "status": "executing"
+                    })
+
+                    # Visual indicator based on tool type
+                    if tool_name == "read_file_as_text" or tool_name == "read_file_with_vision":
+                        file_path = tool_args.get("file_path", "")
+                        file_name = Path(file_path).name if file_path else "unknown"
+                        print(f"\n  📄 [{tool_execution_count}] Reading file: {file_name}")
+                        print(f"      Path: {file_path}")
+                    elif tool_name == "search_web":
+                        query = tool_args.get("query", "")
+                        print(f"\n  🌐 [{tool_execution_count}] Searching web: '{query}'")
+                        # Emit special progress event for grounding search
+                        self._emit_progress("GROUNDING_SEARCH", {
+                            "query": query,
+                            "status": "searching"
+                        })
+                    elif tool_name == "list_directory":
+                        dir_path = tool_args.get("directory_path", "")
+                        print(f"\n  📁 [{tool_execution_count}] Listing directory: {dir_path}")
+                    elif tool_name == "search_files":
+                        pattern = tool_args.get("pattern", "")
+                        print(f"\n  🔎 [{tool_execution_count}] Searching files: {pattern}")
+                    elif tool_name == "get_recent_files":
+                        hours = tool_args.get("hours", 1)
+                        print(f"\n  🕐 [{tool_execution_count}] Getting files from last {hours} hours")
+                    elif tool_name == "get_file_info":
+                        file_path = tool_args.get("file_path", "")
+                        file_name = Path(file_path).name if file_path else "unknown"
+                        print(f"\n  ℹ️  [{tool_execution_count}] Getting info for: {file_name}")
+                    else:
+                        print(f"\n  🔧 [{tool_execution_count}] Executing: {tool_name}")
+
                     result = self._execute_tool(tool_name, tool_args)
-                    
+
+                    # Show completion indicator
+                    is_error = "Error" in result or "error" in result.lower()
+                    if is_error:
+                        print(f"      ❌ Failed")
+                    else:
+                        print(f"      ✅ Complete")
+
+                    # Emit progress: Tool execution complete
+                    self._emit_progress("TOOL_COMPLETE", {
+                        "tool_name": tool_name,
+                        "status": "error" if is_error else "success",
+                        "result_preview": result[:100] if result else ""
+                    })
+
                     function_responses.append(
                         genai.protos.Part(
                             function_response=genai.protos.FunctionResponse(
@@ -1352,17 +1561,28 @@ Provide a detailed answer. If you need to access files to answer better, use the
                             )
                         )
                     )
-                
+
                 # Send function responses back
                 try:
+                    if function_responses:
+                        print(f"\n  🔄 Sending results back to AI for processing...")
                     response = chat.send_message(function_responses)
                 except Exception as e:
-                    print(f"Error sending function responses: {e}")
+                    print(f"  ❌ Error sending function responses: {e}")
                     break
-                    
+
                 iteration += 1
-            
+
+            if tool_execution_count > 0:
+                print(f"\n{'─'*60}")
+                print(f"✅ Completed {tool_execution_count} tool execution(s)")
+                print(f"{'─'*60}")
+
             # Extract final text response
+            print(f"\n{'─'*60}")
+            print("✨ Step 5: Generating final answer...")
+            print(f"{'─'*60}\n")
+
             final_text = ""
             if response and hasattr(response, 'candidates') and response.candidates:
                 candidate = response.candidates[0]
@@ -1370,7 +1590,17 @@ Provide a detailed answer. If you need to access files to answer better, use the
                     for part in candidate.content.parts:
                         if hasattr(part, 'text') and part.text:
                             final_text += part.text
-            
+
+            if final_text:
+                print(f"{'='*60}")
+                print("✅ ANSWER READY")
+                print(f"{'='*60}\n")
+
+                # Emit progress: Answer ready
+                self._emit_progress("ANSWER_READY", {
+                    "status": "complete"
+                })
+
             return final_text if final_text else "No response generated. The model may need more context or there may be an issue with the query."
             
         except Exception as e:

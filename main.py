@@ -140,6 +140,56 @@ class MarkdownTextEdit(QTextEdit):
         mime.setText(markdown_text)
         return mime
 
+def format_progress_html(event_type, data):
+    """Format progress event as HTML for display in response area"""
+    icon_map = {
+        "read_file_as_text": "📄",
+        "read_file_with_vision": "📄",
+        "list_directory": "📁",
+        "search_files": "🔎",
+        "get_recent_files": "🕐",
+        "get_file_info": "ℹ️"
+    }
+
+    if event_type == "MEMORY_SEARCH":
+        return f"<span style='color: #71717A; font-size: 11px;'>🔍 Searching {data['count']} contexts...</span>"
+    elif event_type == "MEMORY_RETRIEVED":
+        contexts = data.get('contexts', [])
+        html = f"<span style='color: #10B981; font-size: 11px;'>📊 Retrieved {data['count']} contexts</span><br>"
+        # Add sub-items for top contexts
+        for ts, sim in contexts[:3]:  # Show top 3
+            marker = "📌" if sim == 1.0 else f"🎯 {sim:.3f}"
+            html += f"<span style='color: #52525B; font-size: 10px; margin-left: 20px;'>{marker} {ts}</span><br>"
+        return html
+    elif event_type == "AI_PROCESSING":
+        return f"<span style='color: #60A5FA; font-size: 11px;'>💬 AI processing...</span>"
+    elif event_type == "TOOL_EXECUTE":
+        tool_name = data['tool_name']
+        icon = icon_map.get(tool_name, "🔧")
+        # Handle web search specially
+        if tool_name == "search_web":
+            query = data.get('args', {}).get('query', '')
+            return f"<span style='color: #60A5FA; font-size: 11px;'>🌐 Searching web: '{escape(query[:50])}'</span>"
+        # Truncate long paths
+        elif 'file_path' in data.get('args', {}):
+            file_path = data['args']['file_path']
+            file_name = Path(file_path).name if file_path else "unknown"
+            return f"<span style='color: #A1A1AA; font-size: 11px;'>{icon} {tool_name}: {escape(file_name)}</span>"
+        else:
+            args_str = str(data.get('args', {}))[:30]
+            return f"<span style='color: #A1A1AA; font-size: 11px;'>{icon} {tool_name}: {escape(args_str)}...</span>"
+    elif event_type == "TOOL_COMPLETE":
+        status_icon = "✅" if data['status'] == "success" else "❌"
+        color = "#10B981" if data['status'] == "success" else "#EF4444"
+        return f"<span style='color: {color}; font-size: 10px; margin-left: 20px;'>{status_icon} Complete</span>"
+    elif event_type == "GROUNDING_SEARCH":
+        return f"<span style='color: #60A5FA; font-size: 11px;'>🌐 Web search used</span>"
+    elif event_type == "ANSWER_READY":
+        return f"<span style='color: #10B981; font-size: 11px; font-weight: 600;'>✨ Answer ready!</span>"
+    else:
+        return f"<span style='color: #71717A; font-size: 11px;'>• {event_type}</span>"
+
+
 def hotkey_listener():
     """Global hotkey listener thread that sends toggle events."""
     def on_activate():
@@ -180,6 +230,10 @@ class CompanionRunner(threading.Thread):
         os.environ["GOOGLE_API_KEY"] = HARD_CODED_API_KEY
         os.environ["GEMINI_API_KEY"] = HARD_CODED_API_KEY
 
+        # Progress callback to send progress updates to GUI
+        def progress_callback(event_type, data):
+            _from_companion_q.put(("PROGRESS", (event_type, data)))
+
         # Pass directly to the class
         kwargs = {
             "api_key": HARD_CODED_API_KEY,
@@ -187,7 +241,8 @@ class CompanionRunner(threading.Thread):
             "watch_dirs": self.config.get("watch_dirs", []),
             "always_recent": self.config.get("always_recent", 3),
             "supermemory_api_key": self.config.get("supermemory_api_key"),
-            "use_supermemory": self.config.get("use_supermemory", True)
+            "use_supermemory": self.config.get("use_supermemory", True),
+            "progress_callback": progress_callback
         }
 
         return BackgroundCompanion(**kwargs)
@@ -461,7 +516,7 @@ class OverlayWindow(QWidget):
         # Response display with header
         resp_header = QHBoxLayout()
         resp_header.setSpacing(0)
-        resp_lbl = QLabel("")
+        resp_lbl = QLabel("RESPONSE")
         resp_lbl.setObjectName("sectionLabel")
         resp_header.addWidget(resp_lbl)
         resp_header.addStretch()
@@ -469,10 +524,10 @@ class OverlayWindow(QWidget):
         self.clear_resp_btn = QPushButton("Clear")
         self.clear_resp_btn.setObjectName("textButton")
         self.clear_resp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.clear_resp_btn.clicked.connect(lambda: self.response_area.clear())
+        self.clear_resp_btn.clicked.connect(self.clear_response_and_progress)
         self.clear_resp_btn.setFixedHeight(24)
         resp_header.addWidget(self.clear_resp_btn)
-        content.addLayout(resp_header)
+        chat_layout.addLayout(resp_header)
 
         self.response_area = MarkdownTextEdit()
         self.response_area.setObjectName("modernTextArea")
@@ -813,7 +868,7 @@ class OverlayWindow(QWidget):
             #modernList::item:hover {
                 background: rgba(255, 255, 255, 0.04);
             }
-            
+
             /* Scrollbars */
             QScrollBar:vertical {
                 background: transparent;
@@ -934,6 +989,34 @@ class OverlayWindow(QWidget):
         else:
             self.status_dot.setStyleSheet("color: #71717A; font-size: 16px;")
 
+    def append_progress(self, event_type: str, data: dict):
+        """Add progress indicator to response area"""
+        # Add header for first progress event
+        if event_type == "MEMORY_SEARCH" and not hasattr(self, '_progress_started'):
+            self._progress_started = True
+            ts = time.strftime("%H:%M:%S")
+            header = (
+                f"<div style='margin-top: 12px; margin-bottom: 8px; padding: 8px 0; "
+                f"border-top: 1px solid rgba(255,255,255,0.08); border-bottom: 1px solid rgba(255,255,255,0.08);'>"
+                f"<span style='color: #60A5FA; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;'>"
+                f"⚙️ PROCESSING [{ts}]</span></div>"
+            )
+            self.response_area.append(header)
+
+        # Reset flag on answer ready
+        if event_type == "ANSWER_READY":
+            self._progress_started = False
+            # Add separator after progress
+            self.response_area.append("<br>")
+
+        progress_html = format_progress_html(event_type, data)
+        self.response_area.append(progress_html + "<br>")
+
+        # Auto-scroll to bottom
+        cursor = self.response_area.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.response_area.setTextCursor(cursor)
+
     def append_response(self, text: str):
         ts = time.strftime("%H:%M:%S")
         # Convert markdown to HTML for display
@@ -952,6 +1035,10 @@ class OverlayWindow(QWidget):
 
         # Add both versions to the custom text edit
         self.response_area.add_markdown_message(markdown_with_ts, html_display)
+
+    def clear_response_and_progress(self):
+        """Clear both response and progress indicators"""
+        self.response_area.clear_messages()
 
     def toggle_visibility(self):
         if self.isVisible():
@@ -1037,6 +1124,10 @@ class OverlayWindow(QWidget):
                 self.signals.log.emit("<span style='color: #EF4444;'>[ERROR]</span> " + str(payload))
             elif typ == "CONFIG_UPDATED":
                 self.signals.log.emit("<span style='color: #10B981;'>Companion config updated.</span>")
+            elif typ == "PROGRESS":
+                # Handle progress updates from backend
+                event_type, data = payload
+                self.append_progress(event_type, data)
             else:
                 self.signals.log.emit(f"[{typ}] {payload}")
 
