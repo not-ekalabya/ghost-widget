@@ -15,11 +15,19 @@ import io
 import numpy as np
 import pyperclip  # For clipboard operations
 
+# Supermemory integration
+try:
+    from supermemory import Supermemory
+    SUPERMEMORY_AVAILABLE = True
+except ImportError:
+    SUPERMEMORY_AVAILABLE = False
+    print("Warning: supermemory package not installed. Install with: pip install --pre supermemory")
+
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt"):
+    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", supermemory_api_key=None, use_supermemory=True):
         """
         Initialize the background companion with RAG support and autonomous content generation
-        
+
         Args:
             api_key: Google Gemini API key
             capture_interval: Seconds between screenshots (default: 60)
@@ -29,6 +37,8 @@ class BackgroundCompanion:
             autonomous_mode: Whether to run in autonomous mode
             autonomous_interval: Seconds between autonomous content generation
             autonomous_output: File path for autonomous content
+            supermemory_api_key: Supermemory API key (optional, reads from SUPERMEMORY_API_KEY env var)
+            use_supermemory: Whether to use Supermemory API for context retrieval (default: True)
         """
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
@@ -44,10 +54,26 @@ class BackgroundCompanion:
         self.autonomous_output = Path(autonomous_output)
         self.last_autonomous_check = 0
         self.last_screen_content = ""
-        
-        # Initialize database
+
+        # Initialize Supermemory
+        self.use_supermemory = use_supermemory and SUPERMEMORY_AVAILABLE
+        self.supermemory_client = None
+        if self.use_supermemory:
+            try:
+                sm_api_key = supermemory_api_key or os.environ.get("SUPERMEMORY_API_KEY")
+                if sm_api_key:
+                    self.supermemory_client = Supermemory(api_key=sm_api_key)
+                    print("✅ Supermemory API initialized successfully!")
+                else:
+                    print("⚠️ Supermemory API key not provided. Set SUPERMEMORY_API_KEY env var or pass supermemory_api_key parameter.")
+                    self.use_supermemory = False
+            except Exception as e:
+                print(f"⚠️ Failed to initialize Supermemory: {e}")
+                self.use_supermemory = False
+
+        # Initialize database (fallback for local storage)
         self._init_database()
-        
+
         # Define available tools for Gemini
         self.tools = self._define_tools()
     
@@ -352,12 +378,12 @@ Be thorough and specific. This will be used for context retrieval later."""
             return f"Error analyzing: {str(e)}"
     
     def _store_context(self, screenshot_path, description, active_context, screen_text=""):
-        """Store context in database with embedding"""
+        """Store context in database with embedding and Supermemory"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         # Generate embedding for the description + screen text
         embedding_content = description + "\n\nScreen Text:\n" + screen_text
         print("Generating embedding...")
@@ -365,79 +391,224 @@ Be thorough and specific. This will be used for context retrieval later."""
         embedding_blob = None
         if embedding:
             embedding_blob = json.dumps(embedding).encode('utf-8')
-        
+
+        # Store in local database
         cursor.execute('''
-            INSERT INTO context_snapshots 
+            INSERT INTO context_snapshots
             (timestamp, screenshot_path, description, active_files, open_applications, embedding, created_at, screen_text)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            timestamp, 
-            screenshot_path, 
-            description, 
+            timestamp,
+            screenshot_path,
+            description,
             json.dumps(active_context['files']),
             json.dumps(active_context['applications']),
             embedding_blob,
             timestamp,
             screen_text
         ))
-        
+
+        context_id = cursor.lastrowid
         conn.commit()
         conn.close()
-        
-        print(f"[{timestamp}] Context stored with embedding")
+
+        # Store in Supermemory if available
+        if self.use_supermemory and self.supermemory_client:
+            try:
+                # Format content for Supermemory
+                files_info = "\n".join([f"  - {f}" for f in active_context['files'][:10]]) if active_context['files'] else "None"
+                apps_info = ", ".join(active_context['applications'][:10]) if active_context['applications'] else "None"
+
+                supermemory_content = f"""Timestamp: {timestamp}
+Context ID: {context_id}
+
+Description:
+{description}
+
+Screen Text:
+{screen_text}
+
+Active Applications: {apps_info}
+
+Recently Accessed Files:
+{files_info}
+
+Screenshot: {screenshot_path}
+"""
+
+                self.supermemory_client.memories.add(content=supermemory_content)
+                print(f"[{timestamp}] Context stored in local DB and Supermemory")
+            except Exception as e:
+                print(f"⚠️ Failed to store in Supermemory (stored locally): {e}")
+        else:
+            print(f"[{timestamp}] Context stored with embedding (local only)")
     
     def _retrieve_relevant_contexts(self, query: str, top_k: int = 10):
         """
-        Retrieve most relevant contexts using RAG
+        Retrieve most relevant contexts using RAG with Supermemory or local embeddings
         Always includes the last N recent contexts plus semantically similar ones
-        
+
         Args:
             query: The user's question or current screen content
             top_k: Total number of contexts to retrieve (including always_recent)
-        
+
         Returns:
             List of (id, timestamp, description, active_files, open_applications, screen_text, similarity_score) tuples
         """
+        # If Supermemory is available, use it for faster retrieval
+        if self.use_supermemory and self.supermemory_client:
+            return self._retrieve_from_supermemory(query, top_k)
+
+        # Fallback to local SQLite + embeddings
+        return self._retrieve_from_local_db(query, top_k)
+
+    def _retrieve_from_supermemory(self, query: str, top_k: int = 10):
+        """
+        Retrieve contexts from Supermemory API (fast, cloud-based retrieval)
+
+        Args:
+            query: The user's question or current screen content
+            top_k: Total number of contexts to retrieve
+
+        Returns:
+            List of tuples with context information
+        """
+        try:
+            print(f"\n🔍 Searching Supermemory with query: '{query[:100]}...'")
+
+            # Search using Supermemory API
+            response = self.supermemory_client.search.execute(q=query)
+
+            # Debug: Check response structure
+            if not response:
+                print("⚠️ Empty response from Supermemory, falling back to local DB")
+                return self._retrieve_from_local_db(query, top_k)
+
+            if not hasattr(response, 'results'):
+                print(f"⚠️ Response doesn't have 'results' attribute. Response type: {type(response)}")
+                print(f"Response attributes: {dir(response)}")
+                return self._retrieve_from_local_db(query, top_k)
+
+            if not response.results:
+                print("⚠️ Response has no results, falling back to local DB")
+                return self._retrieve_from_local_db(query, top_k)
+
+            results = []
+            for idx, result in enumerate(response.results[:top_k]):
+                # Parse the stored content back into structured format
+                content = result.content if (hasattr(result, 'content') and result.content is not None) else str(result)
+
+                # Ensure content is not None
+                if content is None:
+                    content = ""
+
+                # Extract timestamp and description from content
+                timestamp = "Unknown"
+                description = content if content else "No content available"
+                context_id = f"sm_{idx}"
+                active_files = "[]"
+                open_apps = "[]"
+                screen_text = ""
+
+                # Try to parse structured content
+                if content and "Timestamp:" in content:
+                    lines = content.split('\n')
+                    for i, line in enumerate(lines):
+                        if line.startswith("Timestamp:"):
+                            timestamp = line.replace("Timestamp:", "").strip()
+                        elif line.startswith("Context ID:"):
+                            context_id = line.replace("Context ID:", "").strip()
+                        elif line.startswith("Description:"):
+                            # Get description until next section
+                            desc_start = i + 1
+                            desc_lines = []
+                            for j in range(desc_start, len(lines)):
+                                if lines[j].startswith("Screen Text:") or lines[j].startswith("Active Applications:"):
+                                    break
+                                desc_lines.append(lines[j])
+                            description = "\n".join(desc_lines).strip()
+                        elif line.startswith("Screen Text:"):
+                            # Get screen text until next section
+                            st_start = i + 1
+                            st_lines = []
+                            for j in range(st_start, len(lines)):
+                                if lines[j].startswith("Active Applications:") or lines[j].startswith("Recently Accessed"):
+                                    break
+                                st_lines.append(lines[j])
+                            screen_text = "\n".join(st_lines).strip()
+
+                # Score from Supermemory (normalized to 0-1)
+                score = getattr(result, 'score', 0.9 - (idx * 0.05))  # Fallback score based on position
+
+                results.append((
+                    context_id,
+                    timestamp,
+                    description,
+                    active_files,
+                    open_apps,
+                    screen_text,
+                    score
+                ))
+
+            print(f"✅ Retrieved {len(results)} results from Supermemory")
+            return results
+
+        except Exception as e:
+            print(f"⚠️ Error retrieving from Supermemory: {e}")
+            print("Falling back to local database...")
+            return self._retrieve_from_local_db(query, top_k)
+
+    def _retrieve_from_local_db(self, query: str, top_k: int = 10):
+        """
+        Retrieve contexts from local SQLite database (fallback method)
+
+        Args:
+            query: The user's question or current screen content
+            top_k: Total number of contexts to retrieve
+
+        Returns:
+            List of tuples with context information
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         # Get the most recent N contexts (always included)
         cursor.execute('''
             SELECT id, timestamp, description, active_files, open_applications, embedding, screen_text
-            FROM context_snapshots 
-            ORDER BY created_at DESC 
+            FROM context_snapshots
+            ORDER BY created_at DESC
             LIMIT ?
         ''', (self.always_recent,))
-        
+
         recent_contexts = cursor.fetchall()
         recent_ids = {ctx[0] for ctx in recent_contexts}
-        
+
         # Get all contexts with embeddings for similarity search
         cursor.execute('''
             SELECT id, timestamp, description, active_files, open_applications, embedding, screen_text
-            FROM context_snapshots 
+            FROM context_snapshots
             WHERE embedding IS NOT NULL
             ORDER BY created_at DESC
         ''')
-        
+
         all_contexts = cursor.fetchall()
         conn.close()
-        
+
         if not all_contexts:
             return []
-        
+
         # Generate embedding for the query
         query_embedding = self._generate_embedding(query)
-        
+
         if not query_embedding:
             print("Warning: Could not generate query embedding, using only recent contexts")
             return [(ctx[0], ctx[1], ctx[2], ctx[3], ctx[4], ctx[6], 1.0) for ctx in recent_contexts]
-        
+
         # Calculate similarity scores for all contexts
         scored_contexts = []
         for ctx in all_contexts:
             ctx_id, timestamp, description, active_files, open_applications, embedding_blob, screen_text = ctx
-            
+
             if embedding_blob:
                 try:
                     embedding = json.loads(embedding_blob.decode('utf-8'))
@@ -445,23 +616,23 @@ Be thorough and specific. This will be used for context retrieval later."""
                     scored_contexts.append((ctx_id, timestamp, description, active_files, open_applications, screen_text or "", similarity))
                 except Exception as e:
                     print(f"Error processing embedding for context {ctx_id}: {e}")
-        
+
         # Sort by similarity (descending)
         scored_contexts.sort(key=lambda x: x[6], reverse=True)
-        
+
         # Combine: always include recent contexts, then add most similar ones
         result = []
-        
+
         # Add recent contexts first (with score 1.0 to indicate they're always included)
         for ctx in recent_contexts:
             result.append((ctx[0], ctx[1], ctx[2], ctx[3], ctx[4], ctx[6] or "", 1.0))
-        
+
         # Add most similar contexts (excluding those already in recent)
         remaining_slots = top_k - len(recent_contexts)
         for ctx in scored_contexts:
             if ctx[0] not in recent_ids and len(result) < top_k:
                 result.append(ctx)
-        
+
         return result
     
     def _generate_autonomous_content(self):
@@ -1276,15 +1447,21 @@ Provide a detailed answer. If you need to access files to answer better, use the
 
 def main():
     parser = argparse.ArgumentParser(description='AI Background Companion with Content Generation and RAG-based Context Retrieval')
-    parser.add_argument('mode', choices=['capture', 'query', 'list', 'reindex', 'autonomous'], 
+    parser.add_argument('mode', choices=['capture', 'query', 'list', 'reindex', 'autonomous'],
                        help='Mode: capture, query, list, reindex, or autonomous')
     parser.add_argument('--api-key', required=True, help='Google Gemini API key')
-    parser.add_argument('--interval', type=int, default=60, 
+    parser.add_argument('--supermemory-api-key', type=str,
+                       help='Supermemory API key (optional, can also use SUPERMEMORY_API_KEY env var)')
+    parser.add_argument('--use-supermemory', action='store_true', default=True,
+                       help='Use Supermemory API for context retrieval (default: True)')
+    parser.add_argument('--no-supermemory', action='store_false', dest='use_supermemory',
+                       help='Disable Supermemory and use local database only')
+    parser.add_argument('--interval', type=int, default=60,
                        help='Capture interval in seconds (default: 60)')
-    parser.add_argument('--watch-dirs', nargs='+', 
+    parser.add_argument('--watch-dirs', nargs='+',
                        help='Directories to watch for file context (e.g., ~/Documents ~/Projects)')
     parser.add_argument('--question', help='Question to ask (for query mode)')
-    parser.add_argument('--limit', type=int, default=10, 
+    parser.add_argument('--limit', type=int, default=10,
                        help='Number of recent items to show (for list mode)')
     parser.add_argument('--always-recent', type=int, default=3,
                        help='Number of most recent contexts to always include in retrieval (default: 3)')
@@ -1292,14 +1469,14 @@ def main():
                        help='Interval in seconds for autonomous content generation (default: 180 = 3 minutes)')
     parser.add_argument('--autonomous-output', type=str, default='autonomous_content.txt',
                        help='File to write autonomous content to (default: autonomous_content.txt)')
-    
+
     args = parser.parse_args()
-    
+
     # Expand paths
     watch_dirs = []
     if args.watch_dirs:
         watch_dirs = [str(Path(d).expanduser().resolve()) for d in args.watch_dirs]
-    
+
     companion = BackgroundCompanion(
         api_key=args.api_key,
         capture_interval=args.interval,
@@ -1307,7 +1484,9 @@ def main():
         always_recent=args.always_recent,
         autonomous_mode=(args.mode == 'autonomous'),
         autonomous_interval=args.autonomous_interval,
-        autonomous_output=args.autonomous_output
+        autonomous_output=args.autonomous_output,
+        supermemory_api_key=args.supermemory_api_key,
+        use_supermemory=args.use_supermemory
     )
     
     if args.mode == 'capture':

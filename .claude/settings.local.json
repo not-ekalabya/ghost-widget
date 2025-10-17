@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:supermemory.ai)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.supermemory.ai)",
+      "WebFetch(domain:pypi.org)",
+      "WebSearch"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

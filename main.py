@@ -185,7 +185,9 @@ class CompanionRunner(threading.Thread):
             "api_key": HARD_CODED_API_KEY,
             "capture_interval": self.config.get("interval", 60),
             "watch_dirs": self.config.get("watch_dirs", []),
-            "always_recent": self.config.get("always_recent", 3)
+            "always_recent": self.config.get("always_recent", 3),
+            "supermemory_api_key": self.config.get("supermemory_api_key"),
+            "use_supermemory": self.config.get("use_supermemory", True)
         }
 
         return BackgroundCompanion(**kwargs)
@@ -491,15 +493,16 @@ class OverlayWindow(QWidget):
         cfg_lbl.setObjectName("sectionLabel")
         settings_layout.addWidget(cfg_lbl)
 
-        # API Key with save button
+        # API Key with save button (Gemini - shown but not used since hardcoded)
         cfg_form_h = QHBoxLayout()
         cfg_form_h.setSpacing(10)
 
         self.api_key_edit = QLineEdit(self.config.get("api_key", ""))
         self.api_key_edit.setObjectName("modernInput")
-        self.api_key_edit.setPlaceholderText("API Key (optional)")
+        self.api_key_edit.setPlaceholderText("Gemini API Key (hardcoded)")
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_edit.setFixedHeight(38)
+        self.api_key_edit.setEnabled(False)  # Disabled since hardcoded
         cfg_form_h.addWidget(self.api_key_edit)
 
         self.save_cfg_btn = QPushButton("Save")
@@ -510,6 +513,18 @@ class OverlayWindow(QWidget):
         self.save_cfg_btn.setFixedWidth(75)
         cfg_form_h.addWidget(self.save_cfg_btn)
         settings_layout.addLayout(cfg_form_h)
+
+        # Supermemory API Key
+        sm_key_h = QHBoxLayout()
+        sm_key_h.setSpacing(10)
+
+        self.sm_api_key_edit = QLineEdit(self.config.get("supermemory_api_key", ""))
+        self.sm_api_key_edit.setObjectName("modernInput")
+        self.sm_api_key_edit.setPlaceholderText("Supermemory API Key (optional)")
+        self.sm_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.sm_api_key_edit.setFixedHeight(38)
+        sm_key_h.addWidget(self.sm_api_key_edit)
+        settings_layout.addLayout(sm_key_h)
 
         # Interval spinner with modern styling
         interval_h = QHBoxLayout()
@@ -880,9 +895,11 @@ class OverlayWindow(QWidget):
         watch_dirs = [self.watch_list.item(i).text() for i in range(self.watch_list.count())]
         return {
             "api_key": self.api_key_edit.text().strip(),
+            "supermemory_api_key": self.sm_api_key_edit.text().strip(),
             "interval": int(self.interval_spin.value()),
             "watch_dirs": watch_dirs,
-            "always_recent": self.config.get("always_recent", 3)
+            "always_recent": self.config.get("always_recent", 3),
+            "use_supermemory": True
         }
 
     def on_start_stop(self):
@@ -1038,9 +1055,11 @@ class OverlayWindow(QWidget):
 def load_config():
     default = {
         "api_key": "",
+        "supermemory_api_key": "",
         "interval": 60,
         "watch_dirs": [],
-        "always_recent": 3
+        "always_recent": 3,
+        "use_supermemory": True
     }
     try:
         if CONFIG_PATH.exists():
