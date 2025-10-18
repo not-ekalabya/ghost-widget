@@ -63,7 +63,6 @@ class BackgroundCompanion:
         self.autonomous_interval = autonomous_interval
         self.autonomous_output = Path(autonomous_output)
         self.last_autonomous_check = 0
-        self.last_screen_content = ""
         self.progress_callback = progress_callback  # For GUI progress updates
 
         # Initialize Supermemory
@@ -71,7 +70,7 @@ class BackgroundCompanion:
         self.supermemory_client = None
         if self.use_supermemory:
             try:
-                sm_api_key = supermemory_api_key or os.environ.get("SUPERMEMORY_API_KEY")
+                sm_api_key = "sm_t27EWUjMg4XH2vkxaH48d4_pAjJBDwNDZmHFGfhoogrLACsBQBIhEjKzpkXKitqrcHqpPxvZIJxuPWDDHDSYYxm"
                 if sm_api_key:
                     self.supermemory_client = Supermemory(api_key=sm_api_key)
                     print("✅ Supermemory API initialized successfully!")
@@ -238,6 +237,36 @@ class BackgroundCompanion:
                             "required": ["query"]
                         }
                     },
+                    {
+                        "name": "store_memory",
+                        "description": "Store important information to long-term memory (Supermemory). Use this when you observe something significant, novel, or worth remembering about the user's screen activity. Only call this for truly important information, not routine/repetitive activity.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "content": {
+                                    "type": "string",
+                                    "description": "The detailed content to store as a memory. Should be comprehensive and include context about what the user was doing."
+                                },
+                                "summary": {
+                                    "type": "string",
+                                    "description": "A brief one-sentence summary of this memory"
+                                },
+                                "importance": {
+                                    "type": "string",
+                                    "description": "Importance level of this memory",
+                                    "enum": ["low", "medium", "high"]
+                                },
+                                "tags": {
+                                    "type": "array",
+                                    "description": "Tags for categorizing this memory (e.g., ['coding', 'python', 'bug-fix'])",
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                }
+                            },
+                            "required": ["content", "summary", "importance"]
+                        }
+                    },
                 ]
             }
         ]
@@ -343,31 +372,6 @@ class BackgroundCompanion:
         # Return just the paths for storage, limited to 30
         return [f['path'] for f in recent_files[:30]]
     
-    def _extract_screen_text(self, screenshot_path):
-        """Extract text content from screenshot using Gemini vision"""
-        try:
-            with open(screenshot_path, 'rb') as f:
-                image_data = f.read()
-            
-            prompt = """Extract ALL visible text from this screenshot. Focus on:
-1. Main content text (articles, documents, code, etc.)
-2. UI elements and labels
-3. Headings and titles
-4. Any partially written text or drafts
-5. Input fields and text areas
-
-Return ONLY the extracted text, organized by sections if visible. Be comprehensive."""
-            
-            response = self.model.generate_content([
-                prompt,
-                {"mime_type": "image/png", "data": image_data}
-            ])
-            
-            return response.text
-        except Exception as e:
-            print(f"Error extracting screen text: {e}")
-            return ""
-    
     def _analyze_screenshot(self, screenshot_path, active_context):
         """Analyze screenshot using Gemini"""
         try:
@@ -410,17 +414,16 @@ Be thorough and specific. This will be used for context retrieval later."""
             print(f"Error analyzing screenshot: {e}")
             return f"Error analyzing: {str(e)}"
     
-    def _store_context(self, screenshot_path, description, active_context, screen_text=""):
+    def _store_context(self, screenshot_path, description, active_context):
         """Store context in database with embedding and Supermemory"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Generate embedding for the description + screen text
-        embedding_content = description + "\n\nScreen Text:\n" + screen_text
+        # Generate embedding for the description only (vision-based)
         print("Generating embedding...")
-        embedding = self._generate_embedding(embedding_content)
+        embedding = self._generate_embedding(description)
         embedding_blob = None
         if embedding:
             embedding_blob = json.dumps(embedding).encode('utf-8')
@@ -438,7 +441,7 @@ Be thorough and specific. This will be used for context retrieval later."""
             json.dumps(active_context['applications']),
             embedding_blob,
             timestamp,
-            screen_text
+            ""  # Empty screen_text since we're using vision only
         ))
 
         context_id = cursor.lastrowid
@@ -448,18 +451,15 @@ Be thorough and specific. This will be used for context retrieval later."""
         # Store in Supermemory if available
         if self.use_supermemory and self.supermemory_client:
             try:
-                # Format content for Supermemory
+                # Format content for Supermemory (vision-based description only)
                 files_info = "\n".join([f"  - {f}" for f in active_context['files'][:10]]) if active_context['files'] else "None"
                 apps_info = ", ".join(active_context['applications'][:10]) if active_context['applications'] else "None"
 
                 supermemory_content = f"""Timestamp: {timestamp}
 Context ID: {context_id}
 
-Description:
+Description (from Vision Analysis):
 {description}
-
-Screen Text:
-{screen_text}
 
 Active Applications: {apps_info}
 
@@ -470,11 +470,11 @@ Screenshot: {screenshot_path}
 """
 
                 self.supermemory_client.memories.add(content=supermemory_content)
-                print(f"[{timestamp}] Context stored in local DB and Supermemory")
+                print(f"[{timestamp}] Context stored in local DB and Supermemory (vision only)")
             except Exception as e:
                 print(f"⚠️ Failed to store in Supermemory (stored locally): {e}")
         else:
-            print(f"[{timestamp}] Context stored with embedding (local only)")
+            print(f"[{timestamp}] Context stored with embedding (local only, vision-based)")
     
     def _retrieve_relevant_contexts(self, query: str, top_k: int = 10):
         """
@@ -669,29 +669,22 @@ Screenshot: {screenshot_path}
         return result
     
     def _generate_autonomous_content(self):
-        """Generate proactive content based on current screen activity"""
+        """Generate proactive content based on current screen activity (vision only)"""
         try:
             # Capture current screenshot for analysis
             screenshot_path = self._capture_screenshot()
             if not screenshot_path:
                 print("Could not capture screenshot for content generation")
                 return
-            
+
             with open(screenshot_path, 'rb') as f:
                 image_data = f.read()
-            
-            # Extract text from current screen
-            current_screen_text = self._extract_screen_text(screenshot_path)
-            
-            # Check if screen content has changed significantly
-            if self._is_similar_content(self.last_screen_content, current_screen_text):
-                print("Screen content hasn't changed significantly, skipping content generation")
-                return
-            
-            self.last_screen_content = current_screen_text
-            
-            # Retrieve relevant context based on current screen content
-            relevant_contexts = self._retrieve_relevant_contexts(current_screen_text, top_k=5)
+
+            # Note: We're skipping similarity check since we're not extracting text anymore
+            # The vision model will handle the analysis directly
+
+            # Retrieve recent contexts for additional context
+            relevant_contexts = self._retrieve_relevant_contexts("recent screen activity", top_k=5)
             
             # Build context string
             context_parts = []
@@ -714,9 +707,6 @@ Screenshot: {screenshot_path}
             # Create content generation prompt
             prompt = f"""You are an AI companion that generates useful content based on what the user is currently doing on screen.
 
-CURRENT SCREEN CONTENT:
-{current_screen_text}
-
 RELEVANT PAST CONTEXT:
 {context_str}
 
@@ -724,7 +714,7 @@ RELEVANT FILES:
 {', '.join(list(all_files)[:10]) if all_files else 'None'}
 
 YOUR TASK:
-Analyze the current screen and generate appropriate content:
+Analyze the current screen image using vision and generate appropriate content:
 
 1. IF on an AI chatbot/assistant website (ChatGPT, Claude, Gemini, etc.):
    - Generate a well-crafted prompt for the AI based on what you see
@@ -767,9 +757,9 @@ Generate the content now:"""
             ])
             
             generated_content = response.text
-            
-            # Detect content type
-            content_type = self._detect_content_type(current_screen_text, generated_content)
+
+            # Detect content type based on generated content only
+            content_type = self._detect_content_type("", generated_content)
             
             # Write to file with timestamp and metadata
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -801,23 +791,6 @@ Generate the content now:"""
             import traceback
             print(f"Error generating autonomous content: {e}")
             print(traceback.format_exc())
-    
-    def _is_similar_content(self, old_text: str, new_text: str) -> bool:
-        """Check if two text contents are similar enough to skip generation"""
-        if not old_text or not new_text:
-            return False
-        
-        # Simple similarity check based on length and overlap
-        if abs(len(old_text) - len(new_text)) < 50:  # Less than 50 chars difference
-            # Check for significant overlap
-            old_words = set(old_text.lower().split())
-            new_words = set(new_text.lower().split())
-            
-            if len(old_words) > 0 and len(new_words) > 0:
-                overlap = len(old_words & new_words) / len(old_words | new_words)
-                return overlap > 0.8  # 80% similarity threshold
-        
-        return False
     
     def _detect_content_type(self, screen_text: str, generated_content: str) -> str:
         """Detect what type of content was generated"""
@@ -1156,6 +1129,104 @@ Be comprehensive and extract all text and information."""
         except Exception as e:
             return f"Error getting recent files: {str(e)}"
 
+    def store_memory(self, content: str, summary: str, importance: str = "medium", tags: List[str] = None) -> str:
+        """
+        Store important information to Supermemory
+
+        Args:
+            content: The detailed content to store
+            summary: Brief one-sentence summary
+            importance: Importance level (low/medium/high)
+            tags: List of tags for categorization
+
+        Returns:
+            Success or error message
+        """
+        try:
+            if not self.use_supermemory or not self.supermemory_client:
+                return json.dumps({
+                    "success": False,
+                    "error": "Supermemory not available. Using local storage only."
+                })
+
+            # Format content with metadata
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            tags_str = ", ".join(tags) if tags else "general"
+
+            formatted_content = f"""[AI-Stored Memory - {importance.upper()} priority]
+Timestamp: {timestamp}
+Summary: {summary}
+Tags: {tags_str}
+
+{content}
+"""
+
+            # Store to Supermemory
+            self.supermemory_client.memories.add(content=formatted_content)
+
+            # Also store in local database for backup
+            self._store_context_simple(content, summary, importance, tags)
+
+            print(f"\n💾 [AI Decision] Stored memory: {summary}")
+            print(f"   Importance: {importance} | Tags: {tags_str}")
+
+            # Emit progress if callback available
+            self._emit_progress("MEMORY_STORED", {
+                "summary": summary,
+                "importance": importance,
+                "tags": tags or [],
+                "timestamp": timestamp
+            })
+
+            return json.dumps({
+                "success": True,
+                "message": f"Memory stored successfully: {summary}",
+                "timestamp": timestamp
+            })
+
+        except Exception as e:
+            error_msg = f"Error storing memory: {str(e)}"
+            print(f"❌ {error_msg}")
+            return json.dumps({
+                "success": False,
+                "error": error_msg
+            })
+
+    def _store_context_simple(self, content: str, summary: str, importance: str, tags: List[str] = None):
+        """Store a simple memory entry in local database (backup)"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            tags_str = json.dumps(tags) if tags else "[]"
+
+            # Generate embedding
+            embedding_content = f"{summary}\n\n{content}"
+            embedding = self._generate_embedding(embedding_content)
+            embedding_blob = json.dumps(embedding).encode('utf-8') if embedding else None
+
+            cursor.execute('''
+                INSERT INTO context_snapshots
+                (timestamp, screenshot_path, description, active_files, open_applications, embedding, created_at, screen_text, tags)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                timestamp,
+                None,  # No screenshot for AI-stored memories
+                f"[AI-Stored - {importance}] {summary}",
+                "[]",
+                "[]",
+                embedding_blob,
+                timestamp,
+                content,
+                tags_str
+            ))
+
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Warning: Could not store to local database: {e}")
+
     def search_web(self, query: str) -> str:
         """
         Search the web using Google's grounding feature via a separate Gemini instance
@@ -1242,7 +1313,13 @@ Be detailed and informative."""
             "get_file_info": lambda: self.get_file_info(args.get("file_path", "")),
             "search_files": lambda: self.search_files(args.get("pattern", "")),
             "get_recent_files": lambda: self.get_recent_files(args.get("hours", 1)),
-            "search_web": lambda: self.search_web(args.get("query", ""))
+            "search_web": lambda: self.search_web(args.get("query", "")),
+            "store_memory": lambda: self.store_memory(
+                content=args.get("content", ""),
+                summary=args.get("summary", ""),
+                importance=args.get("importance", "medium"),
+                tags=args.get("tags", None)
+            )
         }
 
         if tool_name in tools:
@@ -1250,48 +1327,184 @@ Be detailed and informative."""
         else:
             return f"Unknown tool: {tool_name}"
     
+    def _ai_analyze_and_store(self, screenshot_path, active_context):
+        """
+        AI-driven analysis that decides whether to store information
+        The AI model analyzes the screen using vision and calls store_memory tool if deemed important
+        """
+        try:
+            with open(screenshot_path, 'rb') as f:
+                image_data = f.read()
+
+            # Format context information
+            file_list = active_context['files'][:10] if active_context['files'] else []
+            file_info = '\n'.join([f"  - {f}" for f in file_list]) if file_list else "  None"
+            apps_info = ', '.join(active_context['applications'][:10]) if active_context['applications'] else 'None'
+
+            # Create model with store_memory tool
+            model_with_tools = genai.GenerativeModel(
+                'gemini-2.0-flash-exp',
+                tools=self.tools
+            )
+
+            prompt = f"""You are an AI memory system analyzing the user's screen activity using vision. Your job is to determine if the current screen content contains information worth storing as a long-term memory.
+
+**Active Applications:** {apps_info}
+
+**Recently Accessed Files:**
+{file_info}
+
+**Your Task:**
+Analyze this screen content and decide if it contains information worth remembering. Consider:
+
+1. **STORE AS MEMORY if:**
+   - User is working on something important (coding, writing, research)
+   - New insights, ideas, or discoveries are visible
+   - Important information is being viewed (documents, articles, data)
+   - A significant task or project is in progress
+   - Novel or unique content (not just browsing social media)
+   - User appears to be learning something new
+   - Important communications or decisions
+
+2. **DO NOT STORE if:**
+   - Routine browsing or scrolling
+   - Repetitive or already-seen content
+   - Just navigating menus or settings
+   - Idle screen or screensaver
+   - Entertainment/casual content with no learning value
+   - Similar to recently stored memories
+
+**Available Tool:**
+- `store_memory`: Call this function to store important information
+  - content: Detailed description of what's happening and why it's important
+  - summary: One-sentence summary
+  - importance: "high" for critical info, "medium" for useful info, "low" for minor info
+  - tags: Array of relevant tags (e.g., ["coding", "python", "bug-fix"])
+
+**Instructions:**
+1. Analyze the screen content carefully
+2. If worth storing, call `store_memory` with comprehensive details
+3. If not worth storing, simply respond with "No storage needed - routine activity"
+4. Only store truly important or novel information
+
+Make your decision now:"""
+
+            # Start chat and get AI decision
+            chat = model_with_tools.start_chat()
+            response = chat.send_message([
+                prompt,
+                {"mime_type": "image/png", "data": image_data}
+            ])
+
+            # Handle tool calls (if AI decides to store)
+            max_iterations = 3
+            iteration = 0
+            memory_stored = False
+
+            while iteration < max_iterations:
+                if not response or not hasattr(response, 'candidates') or not response.candidates:
+                    break
+
+                candidate = response.candidates[0]
+                if not hasattr(candidate, 'content') or not candidate.content:
+                    break
+
+                parts = candidate.content.parts
+                if not parts:
+                    break
+
+                # Check for function calls
+                function_calls = [part for part in parts if hasattr(part, 'function_call') and part.function_call]
+
+                if not function_calls:
+                    # No function calls - AI decided not to store
+                    # Extract text response
+                    for part in parts:
+                        if hasattr(part, 'text') and part.text:
+                            if "no storage needed" in part.text.lower():
+                                print(f"   🤖 AI Decision: Not significant enough to store")
+                            else:
+                                print(f"   🤖 AI says: {part.text[:100]}")
+                    break
+
+                # Execute store_memory tool calls
+                function_responses = []
+                for fc in function_calls:
+                    tool_name = fc.function_call.name
+                    tool_args = dict(fc.function_call.args)
+
+                    if tool_name == "store_memory":
+                        memory_stored = True
+                        result = self._execute_tool(tool_name, tool_args)
+                        function_responses.append(
+                            genai.protos.Part(
+                                function_response=genai.protos.FunctionResponse(
+                                    name=tool_name,
+                                    response={"result": result}
+                                )
+                            )
+                        )
+
+                if function_responses:
+                    response = chat.send_message(function_responses)
+
+                iteration += 1
+
+            return memory_stored
+
+        except Exception as e:
+            print(f"   ❌ Error in AI analysis: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def _capture_loop(self):
-        """Main capture loop"""
-        print(f"Background companion started. Capturing every {self.capture_interval} seconds.")
-        print(f"Watching directories: {self.watch_dirs}")
+        """Main capture loop with AI-driven storage decisions"""
+        print(f"🧠 AI-Driven Memory System Started")
+        print(f"   Analyzing screen every {self.capture_interval} seconds")
+        print(f"   AI will decide what's worth storing")
+        print(f"   Watching directories: {self.watch_dirs}")
         if self.autonomous_mode:
             print(f"🤖 AUTONOMOUS MODE ENABLED - Generating content every {self.autonomous_interval} seconds")
             print(f"📝 Content will be written to: {self.autonomous_output}")
             print(f"📋 Content will be automatically copied to clipboard")
-        print("Press Ctrl+C to stop.")
-        
+        print("Press Ctrl+C to stop.\n")
+
+        iteration_count = 0
+
         while self.running:
             try:
+                iteration_count += 1
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                print(f"\n[{timestamp}] 📸 Capture #{iteration_count}")
+
                 # Get active context (apps, files)
                 active_context = self._get_active_context()
-                
+
                 # Capture screenshot
                 screenshot_path = self._capture_screenshot()
-                
+
                 if screenshot_path:
-                    # Extract screen text first
-                    screen_text = self._extract_screen_text(screenshot_path)
-                    
-                    # Analyze with Gemini
-                    print(f"Analyzing screenshot: {screenshot_path}")
-                    description = self._analyze_screenshot(screenshot_path, active_context)
-                    
-                    # Store in database with screen text
-                    self._store_context(screenshot_path, description, active_context, screen_text)
-                    
-                    # Autonomous content generation
+                    # AI-driven analysis and storage decision (vision only)
+                    print(f"   🧠 AI analyzing content with vision...")
+                    self._ai_analyze_and_store(screenshot_path, active_context)
+
+                    # Autonomous content generation (if enabled)
                     if self.autonomous_mode:
                         current_time = time.time()
                         if current_time - self.last_autonomous_check >= self.autonomous_interval:
                             print("\n🤖 Generating autonomous content...")
                             self._generate_autonomous_content()
                             self.last_autonomous_check = current_time
-                
+
                 # Wait for next capture
+                print(f"   ⏳ Waiting {self.capture_interval} seconds until next check...")
                 time.sleep(self.capture_interval)
-                
+
             except Exception as e:
                 print(f"Error in capture loop: {e}")
+                import traceback
+                traceback.print_exc()
                 time.sleep(5)
     
     def start(self):
