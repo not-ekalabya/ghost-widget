@@ -17,6 +17,7 @@ import json
 import threading
 import time
 import re
+import subprocess
 from pathlib import Path
 from queue import Queue, Empty
 from html import escape
@@ -1424,15 +1425,34 @@ class OverlayWindow(QWidget):
                 # Handle Google auth result
                 print(f"📥 Received GOOGLE_AUTH_RESULT in UI thread")
                 result = payload
-                self.google_signin_btn.setEnabled(True)
                 if result['success']:
-                    print(f"✅ Google Sign-In successful, emitting signal to update UI")
+                    print(f"✅ Google Sign-In successful, restarting app...")
+                    # Show restart message
                     self.signals.log.emit(f"<span style='color: #10B981;'>{result['message']}</span>")
-                    # Emit signal to update UI (thread-safe)
-                    self.signals.auth_update.emit(result['user'])
+                    self.signals.log.emit(f"<span style='color: #60A5FA;'>🔄 Restarting app to apply authentication...</span>")
+
+                    # Update button to show restart state
+                    self.google_signin_btn.setEnabled(False)
+                    self.google_signin_btn.setText("🔄 Restarting...")
+
+                    # Switch to Auth tab to show status
+                    self.tabs.setCurrentIndex(2)
+
+                    # Update auth status label
+                    self.auth_status_lbl.setText(f"✅ AUTHENTICATED - Restarting app...")
+
+                    # Show info in user area
+                    restart_msg = """<span style='color: #10B981; font-weight: 600; font-size: 16px;'>✓ Authentication Successful!</span><br><br>
+                    <span style='color: #60A5FA; font-size: 14px;'>🔄 Restarting application...</span><br><br>
+                    <span style='color: #A1A1AA; font-size: 12px;'>The app will restart automatically to load your authenticated session.</span>"""
+                    self.user_info_area.setHtml(restart_msg)
+
+                    # Restart the app after short delay
+                    QTimer.singleShot(2000, self.restart_application)
                 else:
                     print(f"❌ Google Sign-In failed: {result['message']}")
                     self.signals.log.emit(f"<span style='color: #EF4444;'>Google Sign-In failed: {result['message']}</span>")
+                    self.google_signin_btn.setEnabled(True)
                     self.google_signin_btn.setText("🔐 Sign in with Google")
             else:
                 self.signals.log.emit(f"[{typ}] {payload}")
@@ -1441,6 +1461,21 @@ class OverlayWindow(QWidget):
         if self.runner and self.runner.last_error:
             self.signals.log.emit("<span style='color: #EF4444;'>Runner instantiation error:</span> " + str(self.runner.last_error))
             self.runner.last_error = None
+
+    def restart_application(self):
+        """Restart the application to reload authenticated state"""
+        print("🔄 Restarting application...")
+        # Close current app gracefully
+        _to_companion_q.put(("SHUTDOWN", None))
+        time.sleep(0.1)
+
+        # Restart using the same Python executable and script
+        python_exec = sys.executable
+        script_path = sys.argv[0]
+
+        # Close the current app and start a new instance
+        subprocess.Popen([python_exec, script_path] + sys.argv[1:])
+        QApplication.quit()
 
     def closeEvent(self, ev):
         # Attempt clean shutdown of companion
