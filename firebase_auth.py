@@ -383,11 +383,11 @@ class FirebaseAuth:
             with open(self.auth_cache_file, 'r') as f:
                 auth_data = json.load(f)
 
-            saved_at = auth_data.get('saved_at', 0)
+            saved_at = float(auth_data.get('saved_at', 0))
             user_data = auth_data.get('user', {})
 
             # Check if token is expired (tokens expire after 1 hour = 3600 seconds)
-            expires_in = user_data.get('expiresIn', 3600)
+            expires_in = int(user_data.get('expiresIn', 3600))
             time_elapsed = time.time() - saved_at
 
             if time_elapsed < expires_in:
