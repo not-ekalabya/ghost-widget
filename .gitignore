@@ -1,2 +1,49 @@
 node_modules/
 .env
+
+# Firebase configuration (contains sensitive credentials)
+firebase_config.json
+
+# Firebase auth cache (contains user tokens)
+.ghost_widget_auth.json
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+companion_memory.db
+
+# Screenshots directory
+screenshots/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Config files with sensitive data
+.background_companion_overlay_config.json
+config.json
+
+# Autonomous content output
+autonomous_content.txt

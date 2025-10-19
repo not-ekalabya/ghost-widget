@@ -36,6 +36,14 @@ except Exception as e:
     import traceback
     _import_error = traceback.format_exc()
 
+# Import Firebase Auth
+try:
+    from firebase_auth import FirebaseAuth
+    FIREBASE_AVAILABLE = True
+except Exception as e:
+    FIREBASE_AVAILABLE = False
+    _firebase_import_error = str(e)
+
 USE_PYQT6 = True
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -393,8 +401,42 @@ class OverlayWindow(QWidget):
         self._drag_pos = None
         self._is_recording = False
 
+        # Firebase Auth instance
+        self.firebase_auth = None
+        self._init_firebase_auth()
+
         self.init_ui()
         self.start_polling_companion_queue()
+
+    def _init_firebase_auth(self):
+        """Initialize Firebase Auth if config file exists"""
+        if not FIREBASE_AVAILABLE:
+            return
+
+        try:
+            config_path = Path("firebase_config.json")
+            if config_path.exists():
+                self.firebase_auth = FirebaseAuth(config_file="firebase_config.json", persist_auth=True)
+                print("Firebase Auth initialized successfully")
+
+                # Check if user is already authenticated from previous session
+                if self.firebase_auth.is_authenticated():
+                    user_data = self.firebase_auth.get_current_user()
+                    if user_data:
+                        # Update UI to show authenticated state
+                        print(f"✅ Auto-restored session for: {self.firebase_auth.get_user_email()}")
+                        # We'll update the UI after init_ui is called
+                        self._pending_auth_restore = user_data
+                    else:
+                        self._pending_auth_restore = None
+                else:
+                    self._pending_auth_restore = None
+            else:
+                print("Firebase config not found. Create firebase_config.json to enable authentication.")
+                self._pending_auth_restore = None
+        except Exception as e:
+            print(f"Failed to initialize Firebase Auth: {e}")
+            self._pending_auth_restore = None
 
     def init_ui(self):
         self.setWindowTitle("Ghost Widget")
@@ -647,19 +689,124 @@ class OverlayWindow(QWidget):
         # Add settings tab
         self.tabs.addTab(settings_tab, "Settings")
 
+        # === AUTH TAB ===
+        auth_tab = QWidget()
+        auth_layout = QVBoxLayout(auth_tab)
+        auth_layout.setContentsMargins(0, 16, 0, 0)
+        auth_layout.setSpacing(16)
+
+        # Auth status indicator
+        self.auth_status_lbl = QLabel("Not authenticated")
+        self.auth_status_lbl.setObjectName("sectionLabel")
+        auth_layout.addWidget(self.auth_status_lbl)
+
+        # Info text
+        info_lbl = QLabel("Sign in with your Google account to access personalized features")
+        info_lbl.setObjectName("fieldLabel")
+        info_lbl.setStyleSheet("color: #A1A1AA; font-size: 11px; margin-top: 10px;")
+        info_lbl.setWordWrap(True)
+        auth_layout.addWidget(info_lbl)
+
+        # Google Sign-In button (larger, prominent)
+        self.google_signin_btn = QPushButton("🔐 Sign in with Google")
+        self.google_signin_btn.setObjectName("googleSignInButton")
+        self.google_signin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.google_signin_btn.clicked.connect(self.on_google_signin)
+        self.google_signin_btn.setFixedHeight(50)
+        self.google_signin_btn.setStyleSheet("""
+            #googleSignInButton {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #FFFFFF,
+                    stop:1 #F5F5F5
+                );
+                color: #3C4043;
+                border: 1px solid #DADCE0;
+                border-radius: 12px;
+                font-weight: 600;
+                font-size: 14px;
+                letter-spacing: -0.2px;
+            }
+            #googleSignInButton:hover {
+                background: #F8F9FA;
+                border: 1px solid #C0C0C0;
+            }
+            #googleSignInButton:pressed {
+                background: #E8EAED;
+            }
+        """)
+        auth_layout.addWidget(self.google_signin_btn)
+
+        # Additional auth buttons
+        auth_extra_layout = QHBoxLayout()
+        auth_extra_layout.setSpacing(10)
+
+        self.signout_btn = QPushButton("Sign Out")
+        self.signout_btn.setObjectName("secondaryButton")
+        self.signout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.signout_btn.clicked.connect(self.on_signout)
+        self.signout_btn.setFixedHeight(38)
+        self.signout_btn.setEnabled(False)
+        auth_extra_layout.addWidget(self.signout_btn)
+
+        self.anonymous_btn = QPushButton("Anonymous Login")
+        self.anonymous_btn.setObjectName("secondaryButton")
+        self.anonymous_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.anonymous_btn.clicked.connect(self.on_anonymous_signin)
+        self.anonymous_btn.setFixedHeight(38)
+        auth_extra_layout.addWidget(self.anonymous_btn)
+
+        auth_layout.addLayout(auth_extra_layout)
+
+        # User info display
+        user_info_lbl = QLabel("USER INFO")
+        user_info_lbl.setObjectName("sectionLabel")
+        auth_layout.addWidget(user_info_lbl)
+
+        self.user_info_area = QTextEdit()
+        self.user_info_area.setObjectName("modernTextArea")
+        self.user_info_area.setReadOnly(True)
+        self.user_info_area.setFixedHeight(120)
+        self.user_info_area.setPlaceholderText("User information will appear here after authentication...")
+        auth_layout.addWidget(self.user_info_area)
+
+        # Firebase status
+        if FIREBASE_AVAILABLE:
+            firebase_status = "Firebase Auth: Ready"
+            if not self.firebase_auth:
+                firebase_status = "Firebase Auth: Config not found (create firebase_config.json)"
+        else:
+            firebase_status = "Firebase Auth: Not installed (pip install pyrebase4)"
+
+        status_lbl = QLabel(firebase_status)
+        status_lbl.setObjectName("fieldLabel")
+        status_lbl.setStyleSheet("color: #71717A; font-size: 10px; margin-top: 10px;")
+        status_lbl.setWordWrap(True)
+        auth_layout.addWidget(status_lbl)
+
+        auth_layout.addStretch()
+
+        # Add auth tab
+        self.tabs.addTab(auth_tab, "Auth")
+
         container.setLayout(content)
         root.addWidget(container)
         self.setLayout(root)
-        
+
         # Apply modern glassmorphism style
         self.apply_modern_style()
-        
+
         # Add subtle drop shadow
         shadow = QGraphicsDropShadowEffect()
         shadow.setBlurRadius(50)
         shadow.setColor(QColor(0, 0, 0, 180))
         shadow.setOffset(0, 12)
         container.setGraphicsEffect(shadow)
+
+        # Restore authentication state if available
+        if hasattr(self, '_pending_auth_restore') and self._pending_auth_restore:
+            self._update_auth_ui(self._pending_auth_restore)
+            self.signals.log.emit(f"<span style='color: #10B981;'>✅ Restored session: {self._pending_auth_restore.get('email', 'Anonymous')}</span>")
 
     def apply_modern_style(self):
         self.setStyleSheet("""
@@ -975,6 +1122,94 @@ class OverlayWindow(QWidget):
         # optionally clear input
         self.ask_edit.clear()
 
+    def on_google_signin(self):
+        """Handle Google Sign-In"""
+        if not self.firebase_auth:
+            self.signals.log.emit("<span style='color: #EF4444;'>Firebase Auth not initialized. Create firebase_config.json</span>")
+            return
+
+        try:
+            self.signals.log.emit("🔐 Opening Google Sign-In in your browser...")
+            self.google_signin_btn.setEnabled(False)
+            self.google_signin_btn.setText("Signing in...")
+
+            # Run sign-in in a separate thread to avoid blocking UI
+            def sign_in_thread():
+                result = self.firebase_auth.sign_in_with_google()
+                # Update UI from main thread
+                self.signals.log.emit(f"Sign-in completed")
+                _from_companion_q.put(("GOOGLE_AUTH_RESULT", result))
+
+            threading.Thread(target=sign_in_thread, daemon=True).start()
+
+        except Exception as e:
+            self.signals.log.emit(f"<span style='color: #EF4444;'>Error: {str(e)}</span>")
+            self.google_signin_btn.setEnabled(True)
+            self.google_signin_btn.setText("🔐 Sign in with Google")
+
+    def on_anonymous_signin(self):
+        """Handle anonymous sign in"""
+        if not self.firebase_auth:
+            self.signals.log.emit("<span style='color: #EF4444;'>Firebase Auth not initialized. Create firebase_config.json</span>")
+            return
+
+        try:
+            result = self.firebase_auth.sign_in_anonymous()
+            if result['success']:
+                self.signals.log.emit(f"<span style='color: #10B981;'>Signed in anonymously!</span>")
+                self._update_auth_ui(result['user'])
+            else:
+                self.signals.log.emit(f"<span style='color: #EF4444;'>Anonymous sign in failed: {result['message']}</span>")
+        except Exception as e:
+            self.signals.log.emit(f"<span style='color: #EF4444;'>Error: {str(e)}</span>")
+
+    def on_signout(self):
+        """Handle user sign out"""
+        if not self.firebase_auth:
+            return
+
+        try:
+            result = self.firebase_auth.sign_out()
+            if result['success']:
+                self.signals.log.emit(f"<span style='color: #10B981;'>Signed out successfully</span>")
+                self._clear_auth_ui()
+        except Exception as e:
+            self.signals.log.emit(f"<span style='color: #EF4444;'>Error: {str(e)}</span>")
+
+    def _update_auth_ui(self, user_data):
+        """Update UI after successful authentication"""
+        # Update status label
+        if 'email' in user_data and user_data['email']:
+            self.auth_status_lbl.setText(f"AUTHENTICATED: {user_data['email']}")
+        else:
+            self.auth_status_lbl.setText("AUTHENTICATED: Anonymous User")
+
+        # Enable sign out button, disable sign in
+        self.signout_btn.setEnabled(True)
+        self.google_signin_btn.setEnabled(False)
+        self.google_signin_btn.setText("✓ Signed In")
+        self.anonymous_btn.setEnabled(False)
+
+        # Display user info
+        user_info = f"""<span style='color: #10B981; font-weight: 600;'>Authentication Successful!</span><br><br>"""
+        if 'email' in user_data and user_data['email']:
+            user_info += f"<span style='color: #D4D4D8;'><b>Email:</b> {user_data['email']}<br></span>"
+        if 'displayName' in user_data and user_data['displayName']:
+            user_info += f"<span style='color: #D4D4D8;'><b>Name:</b> {user_data['displayName']}<br></span>"
+        user_info += f"<span style='color: #D4D4D8;'><b>User ID:</b> {user_data.get('localId', 'N/A')[:20]}...<br></span>"
+        user_info += f"<span style='color: #71717A;'><b>Token Expires:</b> {user_data.get('expiresIn', 3600)} seconds</span>"
+
+        self.user_info_area.setHtml(user_info)
+
+    def _clear_auth_ui(self):
+        """Clear UI after sign out"""
+        self.auth_status_lbl.setText("Not authenticated")
+        self.signout_btn.setEnabled(False)
+        self.google_signin_btn.setEnabled(True)
+        self.google_signin_btn.setText("🔐 Sign in with Google")
+        self.anonymous_btn.setEnabled(True)
+        self.user_info_area.clear()
+
     def append_log(self, text: str):
         ts = time.strftime("%H:%M:%S")
         self.log_area.append(f"<span style='color: #71717A; font-size: 10px;'>[{ts}]</span> <span style='color: #D4D4D8;'>{text}</span>")
@@ -1128,6 +1363,16 @@ class OverlayWindow(QWidget):
                 # Handle progress updates from backend
                 event_type, data = payload
                 self.append_progress(event_type, data)
+            elif typ == "GOOGLE_AUTH_RESULT":
+                # Handle Google auth result
+                result = payload
+                self.google_signin_btn.setEnabled(True)
+                if result['success']:
+                    self.signals.log.emit(f"<span style='color: #10B981;'>{result['message']}</span>")
+                    self._update_auth_ui(result['user'])
+                else:
+                    self.signals.log.emit(f"<span style='color: #EF4444;'>Google Sign-In failed: {result['message']}</span>")
+                    self.google_signin_btn.setText("🔐 Sign in with Google")
             else:
                 self.signals.log.emit(f"[{typ}] {payload}")
 
