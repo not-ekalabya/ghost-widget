@@ -380,6 +380,8 @@ class Signals(QObject):
     status = pyqtSignal(str)
     response = pyqtSignal(str)
     config_saved = pyqtSignal()
+    auth_update = pyqtSignal(dict)  # Signal for auth UI updates
+    auth_clear = pyqtSignal()  # Signal to clear auth UI
 
 
 class OverlayWindow(QWidget):
@@ -393,6 +395,8 @@ class OverlayWindow(QWidget):
         self.signals.status.connect(self.set_status)
         self.signals.response.connect(self.append_response)
         self.signals.config_saved.connect(self.on_config_saved)
+        self.signals.auth_update.connect(self._update_auth_ui)
+        self.signals.auth_clear.connect(self._clear_auth_ui)
 
         self.config = config
         self.runner = CompanionRunner(self.config)
@@ -403,10 +407,12 @@ class OverlayWindow(QWidget):
 
         # Firebase Auth instance
         self.firebase_auth = None
+        self.auth_refresh_timer = None
         self._init_firebase_auth()
 
         self.init_ui()
         self.start_polling_companion_queue()
+        self.start_auth_token_refresh_timer()
 
     def _init_firebase_auth(self):
         """Initialize Firebase Auth if config file exists"""
@@ -805,8 +811,9 @@ class OverlayWindow(QWidget):
 
         # Restore authentication state if available
         if hasattr(self, '_pending_auth_restore') and self._pending_auth_restore:
-            self._update_auth_ui(self._pending_auth_restore)
-            self.signals.log.emit(f"<span style='color: #10B981;'>✅ Restored session: {self._pending_auth_restore.get('email', 'Anonymous')}</span>")
+            # Use QTimer.singleShot to defer the UI update until after the event loop starts
+            QTimer.singleShot(100, lambda: self.signals.auth_update.emit(self._pending_auth_restore))
+            QTimer.singleShot(100, lambda: self.signals.log.emit(f"<span style='color: #10B981;'>✅ Restored session: {self._pending_auth_restore.get('email', 'Anonymous')}</span>"))
 
     def apply_modern_style(self):
         self.setStyleSheet("""
@@ -1135,9 +1142,10 @@ class OverlayWindow(QWidget):
 
             # Run sign-in in a separate thread to avoid blocking UI
             def sign_in_thread():
+                print("🔄 Starting Google sign-in...")
                 result = self.firebase_auth.sign_in_with_google()
-                # Update UI from main thread
-                self.signals.log.emit(f"Sign-in completed")
+                print(f"🔄 Sign-in result: {result.get('success', False)}")
+                # Update UI from main thread via queue
                 _from_companion_q.put(("GOOGLE_AUTH_RESULT", result))
 
             threading.Thread(target=sign_in_thread, daemon=True).start()
@@ -1157,7 +1165,7 @@ class OverlayWindow(QWidget):
             result = self.firebase_auth.sign_in_anonymous()
             if result['success']:
                 self.signals.log.emit(f"<span style='color: #10B981;'>Signed in anonymously!</span>")
-                self._update_auth_ui(result['user'])
+                self.signals.auth_update.emit(result['user'])
             else:
                 self.signals.log.emit(f"<span style='color: #EF4444;'>Anonymous sign in failed: {result['message']}</span>")
         except Exception as e:
@@ -1172,12 +1180,14 @@ class OverlayWindow(QWidget):
             result = self.firebase_auth.sign_out()
             if result['success']:
                 self.signals.log.emit(f"<span style='color: #10B981;'>Signed out successfully</span>")
-                self._clear_auth_ui()
+                self.signals.auth_clear.emit()
         except Exception as e:
             self.signals.log.emit(f"<span style='color: #EF4444;'>Error: {str(e)}</span>")
 
     def _update_auth_ui(self, user_data):
-        """Update UI after successful authentication"""
+        """Update UI after successful authentication (runs in main thread via signal)"""
+        print(f"🎨 _update_auth_ui called with user: {user_data.get('email', 'Anonymous')}")
+
         # Update status label
         if 'email' in user_data and user_data['email']:
             self.auth_status_lbl.setText(f"AUTHENTICATED: {user_data['email']}")
@@ -1201,8 +1211,15 @@ class OverlayWindow(QWidget):
 
         self.user_info_area.setHtml(user_info)
 
+        # Switch to Auth tab to show the updated UI
+        self.tabs.setCurrentIndex(2)
+
+        print(f"🎨 UI updated - Status: {self.auth_status_lbl.text()}")
+        print(f"🎨 Sign out button enabled: {self.signout_btn.isEnabled()}")
+        print(f"🎨 Google sign in button text: {self.google_signin_btn.text()}")
+
     def _clear_auth_ui(self):
-        """Clear UI after sign out"""
+        """Clear UI after sign out (runs in main thread via signal)"""
         self.auth_status_lbl.setText("Not authenticated")
         self.signout_btn.setEnabled(False)
         self.google_signin_btn.setEnabled(True)
@@ -1305,6 +1322,45 @@ class OverlayWindow(QWidget):
         self.poll_timer.timeout.connect(self.poll_companion_queue)
         self.poll_timer.start(150)
 
+    def start_auth_token_refresh_timer(self):
+        """Start a timer to automatically refresh auth tokens before they expire"""
+        if not self.firebase_auth:
+            return
+
+        # Only start if authenticated
+        if not self.firebase_auth.is_authenticated():
+            return
+
+        # Stop existing timer if running
+        if self.auth_refresh_timer is not None:
+            if self.auth_refresh_timer.isActive():
+                self.auth_refresh_timer.stop()
+
+        self.auth_refresh_timer = QTimer()
+        self.auth_refresh_timer.timeout.connect(self.check_and_refresh_auth_token)
+        # Check every 30 minutes (tokens expire in 60 minutes)
+        self.auth_refresh_timer.start(30 * 60 * 1000)  # 30 minutes in milliseconds
+        print("🔄 Started auto-refresh timer (refreshes every 30 minutes)")
+
+    def check_and_refresh_auth_token(self):
+        """Check if auth token needs refresh and refresh if necessary"""
+        if not self.firebase_auth or not self.firebase_auth.is_authenticated():
+            return
+
+        try:
+            # Always refresh to keep session alive
+            result = self.firebase_auth.refresh_token()
+            if result['success']:
+                print("🔄 Auto-refreshed authentication token")
+                self.signals.log.emit("<span style='color: #60A5FA;'>🔄 Authentication refreshed</span>")
+            else:
+                print(f"⚠️ Auto-refresh failed: {result['message']}")
+                # If refresh fails, user needs to sign in again
+                self.signals.auth_clear.emit()
+                self.signals.log.emit("<span style='color: #EF4444;'>⚠️ Session expired. Please sign in again.</span>")
+        except Exception as e:
+            print(f"⚠️ Auto-refresh error: {e}")
+
     def poll_companion_queue(self):
         # Take messages from _from_companion_q and apply to UI
         changed = False
@@ -1314,6 +1370,7 @@ class OverlayWindow(QWidget):
             except Empty:
                 break
             changed = True
+            print(f"🔔 Queue received message type: {typ}")
             if typ == "STARTED":
                 self._is_recording = True
                 self.start_btn.setText("Stop Recording")
@@ -1365,12 +1422,16 @@ class OverlayWindow(QWidget):
                 self.append_progress(event_type, data)
             elif typ == "GOOGLE_AUTH_RESULT":
                 # Handle Google auth result
+                print(f"📥 Received GOOGLE_AUTH_RESULT in UI thread")
                 result = payload
                 self.google_signin_btn.setEnabled(True)
                 if result['success']:
+                    print(f"✅ Google Sign-In successful, emitting signal to update UI")
                     self.signals.log.emit(f"<span style='color: #10B981;'>{result['message']}</span>")
-                    self._update_auth_ui(result['user'])
+                    # Emit signal to update UI (thread-safe)
+                    self.signals.auth_update.emit(result['user'])
                 else:
+                    print(f"❌ Google Sign-In failed: {result['message']}")
                     self.signals.log.emit(f"<span style='color: #EF4444;'>Google Sign-In failed: {result['message']}</span>")
                     self.google_signin_btn.setText("🔐 Sign in with Google")
             else:
