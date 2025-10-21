@@ -1275,7 +1275,7 @@ class OverlayWindow(QWidget):
             self.response_area.append("<br>")
 
         progress_html = format_progress_html(event_type, data)
-        self.response_area.append(progress_html + "<br>")
+        self.response_area.append(progress_html)
 
         # Auto-scroll to bottom
         cursor = self.response_area.textCursor()

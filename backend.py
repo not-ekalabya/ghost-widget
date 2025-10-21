@@ -872,13 +872,18 @@ Generate the content now:"""
             # Check if file is in watched directories or current directory
             is_allowed = True
             if self.watch_dirs:
+                # If watch_dirs is specified, check if file is in one of them
                 is_allowed = any(
                     str(path).startswith(str(Path(d).resolve())) 
                     for d in self.watch_dirs
                 )
+            else:
+                # If no watch_dirs specified, allow access to current directory and subdirectories
+                current_dir = Path.cwd().resolve()
+                is_allowed = str(path).startswith(str(current_dir))
             
             if not is_allowed:
-                return f"Access denied: {file_path} is not in watched directories"
+                return f"Access denied: {file_path} is not in watched directories or current project directory"
             
             file_extension = path.suffix.lower()
             
@@ -948,13 +953,18 @@ Generate the content now:"""
             # Check permissions
             is_allowed = True
             if self.watch_dirs:
+                # If watch_dirs is specified, check if file is in one of them
                 is_allowed = any(
                     str(path).startswith(str(Path(d).resolve())) 
                     for d in self.watch_dirs
                 )
+            else:
+                # If no watch_dirs specified, allow access to current directory and subdirectories
+                current_dir = Path.cwd().resolve()
+                is_allowed = str(path).startswith(str(current_dir))
             
             if not is_allowed:
-                return f"Access denied: {file_path} is not in watched directories"
+                return f"Access denied: {file_path} is not in watched directories or current project directory"
             
             file_extension = path.suffix.lower()
             
@@ -1808,7 +1818,20 @@ User Question: {question}"""
                     result = self._execute_tool(tool_name, tool_args)
 
                     # Show completion indicator
-                    is_error = "Error" in result or "error" in result.lower()
+                    # Check for specific error patterns, not just the word "Error"
+                    is_error = (
+                        result.startswith("Error reading file") or
+                        result.startswith("Error analyzing file") or
+                        result.startswith("Error getting file info") or
+                        result.startswith("Error searching files") or
+                        result.startswith("Error listing directory") or
+                        result.startswith("Error getting recent files") or
+                        result.startswith("Access denied") or
+                        result.startswith("File not found") or
+                        result.startswith("Directory not found") or
+                        "not installed" in result.lower() or
+                        "not supported" in result.lower()
+                    )
                     if is_error:
                         print(f"      ❌ Failed")
                     else:
