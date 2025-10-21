@@ -372,6 +372,9 @@ class CompanionRunner(threading.Thread):
                 if hasattr(self.companion, k):
                     try:
                         setattr(self.companion, k, v)
+                        # Special handling for user_id changes - log it
+                        if k == "user_id":
+                            print(f"🔄 Updated companion user_id to: {v}")
                     except Exception:
                         pass
 
@@ -1207,6 +1210,11 @@ class OverlayWindow(QWidget):
             self.config['user_id'] = user_id
             self.auth_status_lbl.setText("AUTHENTICATED: Anonymous User")
 
+        # CRITICAL: Update the running companion's user_id
+        print(f"🔄 Updating companion user_id from config to: {user_id}")
+        _to_companion_q.put(("UPDATE_CONFIG", {"user_id": user_id}))
+        self.signals.log.emit(f"<span style='color: #10B981;'>🔄 Updated mem0 user_id to: {user_id}</span>")
+
         # Enable sign out button, disable sign in
         self.signout_btn.setEnabled(True)
         self.google_signin_btn.setEnabled(False)
@@ -1239,6 +1247,16 @@ class OverlayWindow(QWidget):
         self.google_signin_btn.setText("🔐 Sign in with Google")
         self.anonymous_btn.setEnabled(True)
         self.user_info_area.clear()
+
+        # Reset to default user_id
+        default_user_id = "default_user"
+        self.user_id_edit.setText(default_user_id)
+        self.config['user_id'] = default_user_id
+
+        # Update companion's user_id
+        print(f"🔄 Resetting companion user_id to: {default_user_id}")
+        _to_companion_q.put(("UPDATE_CONFIG", {"user_id": default_user_id}))
+        self.signals.log.emit(f"<span style='color: #71717A;'>🔄 Reset mem0 user_id to: {default_user_id}</span>")
 
     def append_log(self, text: str):
         ts = time.strftime("%H:%M:%S")
