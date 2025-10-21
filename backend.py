@@ -76,9 +76,9 @@ class BackgroundCompanion:
                 # Initialize MemoryClient for managed Mem0 platform
                 # The platform handles graph memory and all storage automatically
                 self.mem0_client = MemoryClient(api_key=mem0_api_key)
-                print(f"✅ Mem0 platform initialized for user: {self.user_id}")
+                print(f"OK Mem0 platform initialized for user: {self.user_id}")
             except Exception as e:
-                print(f"⚠️ Failed to initialize Mem0: {e}")
+                print(f"WARNING Failed to initialize Mem0: {e}")
                 print("   Falling back to local database only")
                 self.use_mem0 = False
 
@@ -510,19 +510,52 @@ Screenshot: {screenshot_path}
             List of tuples with context information
         """
         try:
-            print(f"\n🔍 Searching Mem0 platform for user '{self.user_id}' with query: '{query[:100]}...'")
+            print(f"\nSearching Mem0 platform for user '{self.user_id}' with query: '{query[:100]}...'")
 
-            # Search using MemoryClient with user_id for per-user memory separation
-            response = self.mem0_client.search(query=query, user_id=self.user_id, limit=top_k)
+            # Search using MemoryClient with user_id filter (required by v2 API)
+            # The v2 API requires filters to be provided and cannot be empty
+            filters = {"user_id": self.user_id}
+            response = self.mem0_client.search(query=query, filters=filters, limit=top_k)
 
             # Debug: Check response structure
             if not response:
-                print("⚠️ Empty response from Mem0, falling back to local DB")
+                print("WARNING Empty response from Mem0, falling back to local DB")
                 return self._retrieve_from_local_db(query, top_k)
+
+            # Debug: Print actual response structure
+            print(f"DEBUG: Mem0 response type: {type(response)}")
+            print(f"DEBUG: Mem0 response: {response}")
+            
+            # Handle different response formats
+            if isinstance(response, dict):
+                # If response is a dictionary, check for common keys
+                if 'results' in response:
+                    response = response['results']
+                elif 'data' in response:
+                    response = response['data']
+                elif 'memories' in response:
+                    response = response['memories']
+                else:
+                    print("WARNING Unexpected dictionary format from Mem0, falling back to local DB")
+                    return self._retrieve_from_local_db(query, top_k)
+            
+            # Ensure response is a list
+            if not isinstance(response, list):
+                print(f"WARNING Expected list from Mem0, got {type(response)}, falling back to local DB")
+                return self._retrieve_from_local_db(query, top_k)
+            
+            if len(response) > 0:
+                print(f"DEBUG: First item type: {type(response[0])}")
+                print(f"DEBUG: First item keys: {response[0].keys() if isinstance(response[0], dict) else 'N/A'}")
+                print(f"DEBUG: First item sample: {str(response[0])[:200]}")
 
             # Response format from MemoryClient.search() is a list of memory dictionaries
             results = []
             for idx, memory in enumerate(response):
+                # Ensure memory is a dictionary
+                if not isinstance(memory, dict):
+                    print(f"WARNING Skipping non-dict memory item {idx}: {type(memory)}")
+                    continue
                 # Extract memory content
                 # MemoryClient returns: {'id': '...', 'memory': 'content', 'user_id': '...', ...}
                 content = memory.get('memory', '') if isinstance(memory, dict) else str(memory)
@@ -533,13 +566,15 @@ Screenshot: {screenshot_path}
 
                 # Extract timestamp and description from content
                 timestamp = memory.get('created_at', 'Unknown') if isinstance(memory, dict) else "Unknown"
-                description = content if content else "No content available"
                 context_id = memory.get('id', f"mem0_{idx}") if isinstance(memory, dict) else f"mem0_{idx}"
                 active_files = "[]"
                 open_apps = "[]"
                 screen_text = ""
 
-                # Try to parse structured content
+                # Initialize description with the full content
+                description = content if content else "No content available"
+
+                # Try to parse structured content (if stored in our format)
                 if content and "Timestamp:" in content:
                     lines = content.split('\n')
                     for i, line in enumerate(lines):
@@ -552,7 +587,7 @@ Screenshot: {screenshot_path}
                             desc_start = i + 1
                             desc_lines = []
                             for j in range(desc_start, len(lines)):
-                                if lines[j].startswith("Screen Text:") or lines[j].startswith("Active Applications:"):
+                                if lines[j].startswith("Screen Text:") or lines[j].startswith("Active Applications:") or lines[j].startswith("Recently Accessed"):
                                     break
                                 desc_lines.append(lines[j])
                             description = "\n".join(desc_lines).strip()
@@ -565,10 +600,27 @@ Screenshot: {screenshot_path}
                                     break
                                 st_lines.append(lines[j])
                             screen_text = "\n".join(st_lines).strip()
+                        elif line.startswith("Active Applications:"):
+                            # Extract apps info
+                            apps_line = line.replace("Active Applications:", "").strip()
+                            if apps_line and apps_line != "None":
+                                open_apps = json.dumps(apps_line.split(", "))
+                        elif line.startswith("Recently Accessed Files:"):
+                            # Extract files from following lines
+                            files_start = i + 1
+                            file_paths = []
+                            for j in range(files_start, len(lines)):
+                                if lines[j].strip().startswith("-"):
+                                    file_paths.append(lines[j].strip()[1:].strip())
+                                elif lines[j].startswith("Screenshot:") or not lines[j].strip():
+                                    break
+                            if file_paths:
+                                active_files = json.dumps(file_paths)
 
-                # Score from Mem0 (normalized to 0-1)
+                # Score from Mem0 (use actual score if available)
                 score = memory.get('score', 0.9 - (idx * 0.05)) if isinstance(memory, dict) else (0.9 - (idx * 0.05))
 
+                # Add to results
                 results.append((
                     context_id,
                     timestamp,
@@ -579,11 +631,14 @@ Screenshot: {screenshot_path}
                     score
                 ))
 
-            print(f"✅ Retrieved {len(results)} results from Mem0 platform")
+                # Debug: Show what we extracted
+                print(f"  Memory {idx+1}: {description[:100]}... (score: {score:.3f})")
+
+            print(f"OK Retrieved {len(results)} results from Mem0 platform")
             return results
 
         except Exception as e:
-            print(f"⚠️ Error retrieving from Mem0: {e}")
+            print(f"WARNING Error retrieving from Mem0: {e}")
             import traceback
             traceback.print_exc()
             print("Falling back to local database...")
