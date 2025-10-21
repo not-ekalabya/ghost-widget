@@ -198,13 +198,22 @@ class BackgroundCompanion:
                     },
                     {
                         "name": "search_files",
-                        "description": "Search for files by name pattern in watched directories",
+                        "description": "Search for files by name pattern. ONLY use this when you have a SPECIFIC file name or pattern from the captured context. DO NOT use for exploratory searching. If you don't know where a file is, ask the user instead.",
                         "parameters": {
                             "type": "object",
                             "properties": {
                                 "pattern": {
                                     "type": "string",
-                                    "description": "The pattern to search for (e.g., '*.py', 'report*')"
+                                    "description": "The specific file name or pattern to search for (e.g., 'report.pdf', 'main.py', '*.config')"
+                                },
+                                "search_scope": {
+                                    "type": "string",
+                                    "description": "Search scope: 'watched' (default - watched directories), 'home' (user home directory), 'desktop' (desktop folder). NEVER use 'system' - it's too slow.",
+                                    "enum": ["watched", "home", "desktop"]
+                                },
+                                "max_results": {
+                                    "type": "number",
+                                    "description": "Maximum number of results to return (default: 20)"
                                 }
                             },
                             "required": ["pattern"]
@@ -390,7 +399,7 @@ Recently Accessed Files:
 {file_info}
 """
             
-            prompt = f"""Analyze this screenshot in detail. 
+            prompt = f"""Analyze this screenshot in detail.
 
 Additional Context:
 {context_info}
@@ -400,8 +409,14 @@ Provide:
 2. What the user appears to be doing
 3. Key content visible (text, images, UI elements)
 4. Any important context or information
-5. Connection to recently accessed files (if relevant) - mention full file paths
-6. Suggested tags for categorization
+5. **IMPORTANT: Extract and mention ANY file paths visible on screen** (from file explorers, title bars, terminal windows, IDE tabs, browser URLs, etc.)
+6. Connection to recently accessed files (if relevant) - mention full file paths from the context
+7. Suggested tags for categorization
+
+**FILE PATH EXTRACTION IS CRITICAL:**
+- Look carefully for file paths in window titles, terminal outputs, file explorers, IDEs, and browser address bars
+- Record complete absolute paths whenever visible (e.g., C:\\Users\\Documents\\report.pdf, /home/user/project/main.py)
+- Include file extensions
 
 Be thorough and specific. This will be used for context retrieval later."""
             
@@ -1153,34 +1168,90 @@ Be comprehensive and extract all text and information."""
         except Exception as e:
             return f"Error getting file info: {str(e)}"
     
-    def search_files(self, pattern: str) -> str:
-        """Search for files by pattern"""
+    def search_files(self, pattern: str, search_scope: str = "watched", max_results: int = 20) -> str:
+        """Search for files by pattern with limited scope (watched/home/desktop only)"""
         try:
+            # Rate limiting: Track recent search calls
+            if not hasattr(self, '_search_calls'):
+                self._search_calls = []
+
+            # Clean up old calls (older than 60 seconds)
+            current_time = time.time()
+            self._search_calls = [t for t in self._search_calls if current_time - t < 60]
+
+            # Limit to 3 searches per minute
+            if len(self._search_calls) >= 3:
+                return json.dumps({
+                    "error": "Search limit reached (3 per minute). Please ask the user for the file path instead of searching.",
+                    "message": "Too many search attempts. Ask user for file location.",
+                    "results": []
+                }, indent=2)
+
+            self._search_calls.append(current_time)
+
             results = []
-            
-            # If no watch dirs specified, search current directory
-            search_dirs = self.watch_dirs if self.watch_dirs else [str(Path.cwd())]
-            
+
+            # Determine search directories based on scope
+            if search_scope == "home":
+                search_dirs = [str(Path.home())]
+            elif search_scope == "desktop":
+                search_dirs = [str(Path.home() / "Desktop")]
+            else:  # "watched" or default
+                # If no watch dirs specified, search current directory
+                search_dirs = self.watch_dirs if self.watch_dirs else [str(Path.cwd())]
+
+            print(f"🔍 Searching for '{pattern}' in scope '{search_scope}' ({len(search_dirs)} directories)...")
+
             for watch_dir in search_dirs:
                 watch_path = Path(watch_dir).resolve()
                 if not watch_path.exists():
                     continue
-                
+
                 try:
+                    # Use rglob for recursive search
                     for file_path in watch_path.rglob(pattern):
+                        if len(results) >= max_results:
+                            break
+
                         if file_path.is_file():
-                            # Skip common ignore patterns
-                            if any(ignore in str(file_path) for ignore in ['node_modules', '__pycache__', '.git', 'venv', '.venv']):
+                            # Skip common ignore patterns and system directories
+                            path_str = str(file_path)
+                            skip_patterns = [
+                                'node_modules', '__pycache__', '.git', 'venv', '.venv',
+                                'AppData\\Local\\Temp', 'Windows\\System32', '$Recycle.Bin',
+                                '.cache', '.tmp', 'Library/Caches'
+                            ]
+                            if any(ignore in path_str for ignore in skip_patterns):
                                 continue
-                            results.append({
-                                'path': str(file_path.absolute()),
-                                'name': file_path.name,
-                                'size': file_path.stat().st_size
-                            })
+
+                            try:
+                                results.append({
+                                    'path': str(file_path.absolute()),
+                                    'name': file_path.name,
+                                    'size': file_path.stat().st_size,
+                                    'modified': datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
+                                })
+                            except Exception:
+                                # Skip files we can't access
+                                pass
+
+                    if len(results) >= max_results:
+                        break
+
                 except Exception as e:
                     print(f"Error searching in {watch_dir}: {e}")
-            
-            return json.dumps(results[:50], indent=2)  # Limit to 50 results
+
+            if not results:
+                return json.dumps({
+                    "message": f"No files found matching pattern '{pattern}' in scope '{search_scope}'",
+                    "results": []
+                }, indent=2)
+
+            return json.dumps({
+                "message": f"Found {len(results)} files matching '{pattern}' (scope: {search_scope})",
+                "results": results
+            }, indent=2)
+
         except Exception as e:
             return f"Error searching files: {str(e)}"
     
@@ -1376,7 +1447,11 @@ Be detailed and informative."""
             "read_file_with_vision": lambda: self.read_file_with_vision(args.get("file_path", "")),
             "list_directory": lambda: self.list_directory(args.get("directory_path", "")),
             "get_file_info": lambda: self.get_file_info(args.get("file_path", "")),
-            "search_files": lambda: self.search_files(args.get("pattern", "")),
+            "search_files": lambda: self.search_files(
+                pattern=args.get("pattern", ""),
+                search_scope=args.get("search_scope", "watched"),
+                max_results=args.get("max_results", 50)
+            ),
             "get_recent_files": lambda: self.get_recent_files(args.get("hours", 1)),
             "search_web": lambda: self.search_web(args.get("query", "")),
             "store_memory": lambda: self.store_memory(
@@ -1430,6 +1505,7 @@ Analyze this screen content and decide if it contains information worth remember
    - Novel or unique content (not just browsing social media)
    - User appears to be learning something new
    - Important communications or decisions
+   - **Any file paths are visible on screen** (file explorers, terminal, IDE, browser)
 
 2. **DO NOT STORE if:**
    - Routine browsing or scrolling
@@ -1441,16 +1517,20 @@ Analyze this screen content and decide if it contains information worth remember
 
 **Available Tool:**
 - `store_memory`: Call this function to store important information
-  - content: Detailed description of what's happening and why it's important
+  - content: Detailed description of what's happening and why it's important. **MUST include any file paths visible on screen!**
   - summary: One-sentence summary
   - importance: "high" for critical info, "medium" for useful info, "low" for minor info
   - tags: Array of relevant tags (e.g., ["coding", "python", "bug-fix"])
 
 **Instructions:**
 1. Analyze the screen content carefully
-2. If worth storing, call `store_memory` with comprehensive details
-3. If not worth storing, simply respond with "No storage needed - routine activity"
-4. Only store truly important or novel information
+2. **CRITICAL: Extract ALL visible file paths** from window titles, file explorers, terminal output, IDE tabs, browser URLs, etc.
+3. If worth storing, call `store_memory` with comprehensive details including:
+   - Complete file paths with extensions (e.g., C:\\Users\\Documents\\report.pdf)
+   - What the user was doing with those files
+   - Application context
+4. If not worth storing, simply respond with "No storage needed - routine activity"
+5. Only store truly important or novel information
 
 Make your decision now:"""
 
@@ -1700,8 +1780,12 @@ FILE SYSTEM TOOLS:
 - read_file_with_vision: Use AI vision to analyze any file including images, PDFs, and complex documents
 - list_directory: List directory contents
 - get_file_info: Get file metadata
-- search_files: Search for files by pattern (e.g., "*.py", "config.*")
-- get_recent_files: Get recently modified files
+- search_files: Search for SPECIFIC files by name/pattern (ONLY when you have a concrete file name from context):
+  * pattern: Specific file name (e.g., "report.pdf", "main.py")
+  * search_scope: "watched" (default), "home", or "desktop" only
+  * **WARNING: This is slow. ONLY use when you have a specific file name from the captured context!**
+  * **If you don't know the file name or location, ASK THE USER instead of searching!**
+- get_recent_files: Get recently modified files from watched directories
 
 WEB SEARCH TOOL:
 - search_web: Search the web for current information, facts, news, or real-time data
@@ -1712,14 +1796,43 @@ WEB SEARCH TOOL:
   * Verification of information
 
 IMPORTANT GUIDELINES:
-1. For Word documents (.docx), PDFs, and other complex documents, you can use EITHER:
-   - read_file_as_text: to get extracted text content
-   - read_file_with_vision: to send the file directly to Gemini for comprehensive analysis
 
-2. Always read relevant files first to gather information before answering
-3. Use search_web when you need current information beyond the stored contexts
-4. Provide detailed, well-structured answers
-5. Use the available tools with full file paths
+1. **SMART FILE HANDLING STRATEGY (behave like a sane human):**
+
+   **WHEN YOU SEE FILE PATHS IN THE CONTEXT:**
+   - Use those exact paths directly with read_file_as_text or read_file_with_vision
+   - Don't search - you already have the path!
+
+   **WHEN USER ASKS ABOUT A FILE YOU DON'T HAVE THE PATH FOR:**
+   - First check: Is there a similar file name in the recent files list?
+   - If YES and it seems related: Use that path
+   - If NO or UNSURE: **ASK THE USER** for the file path
+   - DO NOT blindly search through directories hoping to find it
+
+   **ONLY USE search_files WHEN:**
+   - You saw the exact file name in a recent context (e.g., "report.pdf")
+   - You're 90% sure it's in watched/home/desktop directories
+   - It's a common file in a predictable location (e.g., "config.json" on desktop)
+
+   **NEVER DO THIS:**
+   - ❌ "Let me search the entire computer for you..." (NO!)
+   - ❌ Searching with vague patterns like "*.txt" or "*report*"
+   - ❌ Multiple search attempts with different patterns
+   - ❌ Searching when you have zero clues about the file
+
+   **INSTEAD DO THIS:**
+   - ✅ "I can see you were working on C:\\Users\\John\\Documents\\report.pdf. Let me read that file."
+   - ✅ "I don't have the path to that file. Could you please provide the full file path?"
+   - ✅ "I see you mentioned 'config.json' - let me check your desktop for it."
+
+2. For Word documents (.docx), PDFs, and other complex documents:
+   - read_file_as_text: to get extracted text content
+   - read_file_with_vision: for comprehensive AI analysis
+
+3. Always read relevant files first to gather information before answering
+4. Use search_web when you need current information beyond the stored contexts
+5. Provide detailed, well-structured answers
+6. **When in doubt, ASK THE USER - don't waste time searching randomly!**
 
 User Question: {question}"""
         
