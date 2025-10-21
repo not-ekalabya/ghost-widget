@@ -6,7 +6,9 @@
       "WebFetch(domain:docs.supermemory.ai)",
       "WebFetch(domain:pypi.org)",
       "WebSearch",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "WebFetch(domain:docs.mem0.ai)",
+      "WebFetch(domain:deepwiki.com)"
     ],
     "deny": [],
     "ask": []

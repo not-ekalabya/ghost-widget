@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Modern Overlay app that wraps BackgroundCompanion from main.py
+Modern Overlay app that wraps Ghost Widget from main.py
 
 Features:
 - Floating translucent panel (draggable) always on top
@@ -243,14 +243,16 @@ class CompanionRunner(threading.Thread):
         def progress_callback(event_type, data):
             _from_companion_q.put(("PROGRESS", (event_type, data)))
 
+        # Get user_id from config (will be set by auth system)
+        user_id = self.config.get("user_id", "default_user")
+
         # Pass directly to the class
         kwargs = {
             "api_key": HARD_CODED_API_KEY,
             "capture_interval": self.config.get("interval", 60),
             "watch_dirs": self.config.get("watch_dirs", []),
             "always_recent": self.config.get("always_recent", 3),
-            "supermemory_api_key": self.config.get("supermemory_api_key"),
-            "use_supermemory": self.config.get("use_supermemory", True),
+            "user_id": user_id,
             "progress_callback": progress_callback
         }
 
@@ -618,17 +620,20 @@ class OverlayWindow(QWidget):
         cfg_form_h.addWidget(self.save_cfg_btn)
         settings_layout.addLayout(cfg_form_h)
 
-        # Supermemory API Key
-        sm_key_h = QHBoxLayout()
-        sm_key_h.setSpacing(10)
+        # User ID (for mem0 per-user memory separation)
+        user_id_h = QHBoxLayout()
+        user_id_h.setSpacing(10)
 
-        self.sm_api_key_edit = QLineEdit(self.config.get("supermemory_api_key", ""))
-        self.sm_api_key_edit.setObjectName("modernInput")
-        self.sm_api_key_edit.setPlaceholderText("Supermemory API Key (optional)")
-        self.sm_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.sm_api_key_edit.setFixedHeight(38)
-        sm_key_h.addWidget(self.sm_api_key_edit)
-        settings_layout.addLayout(sm_key_h)
+        user_id_label = QLabel("User ID:")
+        user_id_label.setObjectName("fieldLabel")
+        user_id_h.addWidget(user_id_label)
+
+        self.user_id_edit = QLineEdit(self.config.get("user_id", "default_user"))
+        self.user_id_edit.setObjectName("modernInput")
+        self.user_id_edit.setPlaceholderText("User ID for memory separation")
+        self.user_id_edit.setFixedHeight(38)
+        user_id_h.addWidget(self.user_id_edit)
+        settings_layout.addLayout(user_id_h)
 
         # Interval spinner with modern styling
         interval_h = QHBoxLayout()
@@ -1105,11 +1110,10 @@ class OverlayWindow(QWidget):
         watch_dirs = [self.watch_list.item(i).text() for i in range(self.watch_list.count())]
         return {
             "api_key": self.api_key_edit.text().strip(),
-            "supermemory_api_key": self.sm_api_key_edit.text().strip(),
+            "user_id": self.user_id_edit.text().strip() or "default_user",
             "interval": int(self.interval_spin.value()),
             "watch_dirs": watch_dirs,
-            "always_recent": self.config.get("always_recent", 3),
-            "use_supermemory": True
+            "always_recent": self.config.get("always_recent", 3)
         }
 
     def on_start_stop(self):
@@ -1189,10 +1193,18 @@ class OverlayWindow(QWidget):
         """Update UI after successful authentication (runs in main thread via signal)"""
         print(f"🎨 _update_auth_ui called with user: {user_data.get('email', 'Anonymous')}")
 
-        # Update status label
+        # Update user_id based on email for per-user memory separation
         if 'email' in user_data and user_data['email']:
+            # Use email as user_id (sanitized)
+            user_id = user_data['email'].replace('@', '_at_').replace('.', '_')
+            self.user_id_edit.setText(user_id)
+            self.config['user_id'] = user_id
             self.auth_status_lbl.setText(f"AUTHENTICATED: {user_data['email']}")
         else:
+            # Use anonymous user ID
+            user_id = f"anonymous_{user_data.get('localId', 'unknown')[:8]}"
+            self.user_id_edit.setText(user_id)
+            self.config['user_id'] = user_id
             self.auth_status_lbl.setText("AUTHENTICATED: Anonymous User")
 
         # Enable sign out button, disable sign in
@@ -1487,11 +1499,10 @@ class OverlayWindow(QWidget):
 def load_config():
     default = {
         "api_key": "",
-        "supermemory_api_key": "",
+        "user_id": "default_user",
         "interval": 60,
         "watch_dirs": [],
-        "always_recent": 3,
-        "use_supermemory": True
+        "always_recent": 3
     }
     try:
         if CONFIG_PATH.exists():

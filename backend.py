@@ -15,13 +15,13 @@ import io
 import numpy as np
 import pyperclip  # For clipboard operations
 
-# Supermemory integration
+# Mem0 integration
 try:
-    from supermemory import Supermemory
-    SUPERMEMORY_AVAILABLE = True
+    from mem0 import MemoryClient
+    MEM0_AVAILABLE = True
 except ImportError:
-    SUPERMEMORY_AVAILABLE = False
-    print("Warning: supermemory package not installed. Install with: pip install --pre supermemory")
+    MEM0_AVAILABLE = False
+    print("Warning: mem0 package not installed. Install with: pip install mem0ai")
 
 # Google grounding for web search
 try:
@@ -32,7 +32,7 @@ except ImportError:
     print("Warning: Google genai library doesn't support grounding. Using fallback search.")
 
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", supermemory_api_key=None, use_supermemory=True, progress_callback=None):
+    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None):
         """
         Initialize the background companion with RAG support and autonomous content generation
 
@@ -45,8 +45,7 @@ class BackgroundCompanion:
             autonomous_mode: Whether to run in autonomous mode
             autonomous_interval: Seconds between autonomous content generation
             autonomous_output: File path for autonomous content
-            supermemory_api_key: Supermemory API key (optional, reads from SUPERMEMORY_API_KEY env var)
-            use_supermemory: Whether to use Supermemory API for context retrieval (default: True)
+            user_id: User identifier for per-user memory separation (default: "default_user")
             progress_callback: Callback function for progress updates (for GUI)
         """
         genai.configure(api_key=api_key)
@@ -64,22 +63,24 @@ class BackgroundCompanion:
         self.autonomous_output = Path(autonomous_output)
         self.last_autonomous_check = 0
         self.progress_callback = progress_callback  # For GUI progress updates
+        self.user_id = user_id  # Store user_id for per-user memory separation
 
-        # Initialize Supermemory
-        self.use_supermemory = use_supermemory and SUPERMEMORY_AVAILABLE
-        self.supermemory_client = None
-        if self.use_supermemory:
+        # Initialize Mem0 Platform with API key
+        self.use_mem0 = MEM0_AVAILABLE
+        self.mem0_client = None
+        if self.use_mem0:
             try:
-                sm_api_key = "sm_t27EWUjMg4XH2vkxaH48d4_pAjJBDwNDZmHFGfhoogrLACsBQBIhEjKzpkXKitqrcHqpPxvZIJxuPWDDHDSYYxm"
-                if sm_api_key:
-                    self.supermemory_client = Supermemory(api_key=sm_api_key)
-                    print("✅ Supermemory API initialized successfully!")
-                else:
-                    print("⚠️ Supermemory API key not provided. Set SUPERMEMORY_API_KEY env var or pass supermemory_api_key parameter.")
-                    self.use_supermemory = False
+                # Hard-coded Mem0 API key
+                mem0_api_key = "m0-GQo1C1BLFecWLInbI5Cb3R3MAum0cwxwbIOJcKnk"
+
+                # Initialize MemoryClient for managed Mem0 platform
+                # The platform handles graph memory and all storage automatically
+                self.mem0_client = MemoryClient(api_key=mem0_api_key)
+                print(f"✅ Mem0 platform initialized for user: {self.user_id}")
             except Exception as e:
-                print(f"⚠️ Failed to initialize Supermemory: {e}")
-                self.use_supermemory = False
+                print(f"⚠️ Failed to initialize Mem0: {e}")
+                print("   Falling back to local database only")
+                self.use_mem0 = False
 
         # Initialize database (fallback for local storage)
         self._init_database()
@@ -239,7 +240,7 @@ class BackgroundCompanion:
                     },
                     {
                         "name": "store_memory",
-                        "description": "Store important information to long-term memory (Supermemory). Use this when you observe something significant, novel, or worth remembering about the user's screen activity. Only call this for truly important information, not routine/repetitive activity.",
+                        "description": "Store important information to long-term graph memory (Mem0). Use this when you observe something significant, novel, or worth remembering about the user's screen activity. Memories are stored per-user and as graph relationships. Only call this for truly important information, not routine/repetitive activity.",
                         "parameters": {
                             "type": "object",
                             "properties": {
@@ -415,7 +416,7 @@ Be thorough and specific. This will be used for context retrieval later."""
             return f"Error analyzing: {str(e)}"
     
     def _store_context(self, screenshot_path, description, active_context):
-        """Store context in database with embedding and Supermemory"""
+        """Store context in database with embedding and Mem0 graph memory"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -448,14 +449,14 @@ Be thorough and specific. This will be used for context retrieval later."""
         conn.commit()
         conn.close()
 
-        # Store in Supermemory if available
-        if self.use_supermemory and self.supermemory_client:
+        # Store in Mem0 if available
+        if self.use_mem0 and self.mem0_client:
             try:
-                # Format content for Supermemory (vision-based description only)
+                # Format content for Mem0 (vision-based description only)
                 files_info = "\n".join([f"  - {f}" for f in active_context['files'][:10]]) if active_context['files'] else "None"
                 apps_info = ", ".join(active_context['applications'][:10]) if active_context['applications'] else "None"
 
-                supermemory_content = f"""Timestamp: {timestamp}
+                mem0_content = f"""Timestamp: {timestamp}
 Context ID: {context_id}
 
 Description (from Vision Analysis):
@@ -469,16 +470,18 @@ Recently Accessed Files:
 Screenshot: {screenshot_path}
 """
 
-                self.supermemory_client.memories.add(content=supermemory_content)
-                print(f"[{timestamp}] Context stored in local DB and Supermemory (vision only)")
+                # Add memory with user_id for per-user separation
+                # MemoryClient.add() expects messages format
+                self.mem0_client.add(mem0_content, user_id=self.user_id)
+                print(f"[{timestamp}] Context stored in local DB and Mem0 platform for user '{self.user_id}'")
             except Exception as e:
-                print(f"⚠️ Failed to store in Supermemory (stored locally): {e}")
+                print(f"⚠️ Failed to store in Mem0 (stored locally): {e}")
         else:
             print(f"[{timestamp}] Context stored with embedding (local only, vision-based)")
     
     def _retrieve_relevant_contexts(self, query: str, top_k: int = 10):
         """
-        Retrieve most relevant contexts using RAG with Supermemory or local embeddings
+        Retrieve most relevant contexts using RAG with Mem0 graph memory or local embeddings
         Always includes the last N recent contexts plus semantically similar ones
 
         Args:
@@ -488,16 +491,16 @@ Screenshot: {screenshot_path}
         Returns:
             List of (id, timestamp, description, active_files, open_applications, screen_text, similarity_score) tuples
         """
-        # If Supermemory is available, use it for faster retrieval
-        if self.use_supermemory and self.supermemory_client:
-            return self._retrieve_from_supermemory(query, top_k)
+        # If Mem0 is available, use it for faster retrieval with graph memory
+        if self.use_mem0 and self.mem0_client:
+            return self._retrieve_from_mem0(query, top_k)
 
         # Fallback to local SQLite + embeddings
         return self._retrieve_from_local_db(query, top_k)
 
-    def _retrieve_from_supermemory(self, query: str, top_k: int = 10):
+    def _retrieve_from_mem0(self, query: str, top_k: int = 10):
         """
-        Retrieve contexts from Supermemory API (fast, cloud-based retrieval)
+        Retrieve contexts from Mem0 Platform (fast, cloud-based retrieval with graph memory)
 
         Args:
             query: The user's question or current screen content
@@ -507,38 +510,31 @@ Screenshot: {screenshot_path}
             List of tuples with context information
         """
         try:
-            print(f"\n🔍 Searching Supermemory with query: '{query[:100]}...'")
+            print(f"\n🔍 Searching Mem0 platform for user '{self.user_id}' with query: '{query[:100]}...'")
 
-            # Search using Supermemory API
-            response = self.supermemory_client.search.execute(q=query)
+            # Search using MemoryClient with user_id for per-user memory separation
+            response = self.mem0_client.search(query=query, user_id=self.user_id, limit=top_k)
 
             # Debug: Check response structure
             if not response:
-                print("⚠️ Empty response from Supermemory, falling back to local DB")
+                print("⚠️ Empty response from Mem0, falling back to local DB")
                 return self._retrieve_from_local_db(query, top_k)
 
-            if not hasattr(response, 'results'):
-                print(f"⚠️ Response doesn't have 'results' attribute. Response type: {type(response)}")
-                print(f"Response attributes: {dir(response)}")
-                return self._retrieve_from_local_db(query, top_k)
-
-            if not response.results:
-                print("⚠️ Response has no results, falling back to local DB")
-                return self._retrieve_from_local_db(query, top_k)
-
+            # Response format from MemoryClient.search() is a list of memory dictionaries
             results = []
-            for idx, result in enumerate(response.results[:top_k]):
-                # Parse the stored content back into structured format
-                content = result.content if (hasattr(result, 'content') and result.content is not None) else str(result)
+            for idx, memory in enumerate(response):
+                # Extract memory content
+                # MemoryClient returns: {'id': '...', 'memory': 'content', 'user_id': '...', ...}
+                content = memory.get('memory', '') if isinstance(memory, dict) else str(memory)
 
                 # Ensure content is not None
                 if content is None:
                     content = ""
 
                 # Extract timestamp and description from content
-                timestamp = "Unknown"
+                timestamp = memory.get('created_at', 'Unknown') if isinstance(memory, dict) else "Unknown"
                 description = content if content else "No content available"
-                context_id = f"sm_{idx}"
+                context_id = memory.get('id', f"mem0_{idx}") if isinstance(memory, dict) else f"mem0_{idx}"
                 active_files = "[]"
                 open_apps = "[]"
                 screen_text = ""
@@ -551,7 +547,7 @@ Screenshot: {screenshot_path}
                             timestamp = line.replace("Timestamp:", "").strip()
                         elif line.startswith("Context ID:"):
                             context_id = line.replace("Context ID:", "").strip()
-                        elif line.startswith("Description:"):
+                        elif line.startswith("Description:") or line.startswith("Description (from Vision Analysis):"):
                             # Get description until next section
                             desc_start = i + 1
                             desc_lines = []
@@ -570,8 +566,8 @@ Screenshot: {screenshot_path}
                                 st_lines.append(lines[j])
                             screen_text = "\n".join(st_lines).strip()
 
-                # Score from Supermemory (normalized to 0-1)
-                score = getattr(result, 'score', 0.9 - (idx * 0.05))  # Fallback score based on position
+                # Score from Mem0 (normalized to 0-1)
+                score = memory.get('score', 0.9 - (idx * 0.05)) if isinstance(memory, dict) else (0.9 - (idx * 0.05))
 
                 results.append((
                     context_id,
@@ -583,11 +579,13 @@ Screenshot: {screenshot_path}
                     score
                 ))
 
-            print(f"✅ Retrieved {len(results)} results from Supermemory")
+            print(f"✅ Retrieved {len(results)} results from Mem0 platform")
             return results
 
         except Exception as e:
-            print(f"⚠️ Error retrieving from Supermemory: {e}")
+            print(f"⚠️ Error retrieving from Mem0: {e}")
+            import traceback
+            traceback.print_exc()
             print("Falling back to local database...")
             return self._retrieve_from_local_db(query, top_k)
 
@@ -1131,7 +1129,7 @@ Be comprehensive and extract all text and information."""
 
     def store_memory(self, content: str, summary: str, importance: str = "medium", tags: List[str] = None) -> str:
         """
-        Store important information to Supermemory
+        Store important information to Mem0 graph memory
 
         Args:
             content: The detailed content to store
@@ -1143,10 +1141,10 @@ Be comprehensive and extract all text and information."""
             Success or error message
         """
         try:
-            if not self.use_supermemory or not self.supermemory_client:
+            if not self.use_mem0 or not self.mem0_client:
                 return json.dumps({
                     "success": False,
-                    "error": "Supermemory not available. Using local storage only."
+                    "error": "Mem0 not available. Using local storage only."
                 })
 
             # Format content with metadata
@@ -1161,13 +1159,13 @@ Tags: {tags_str}
 {content}
 """
 
-            # Store to Supermemory
-            self.supermemory_client.memories.add(content=formatted_content)
+            # Store to Mem0 Platform with user_id for per-user separation
+            self.mem0_client.add(formatted_content, user_id=self.user_id)
 
             # Also store in local database for backup
             self._store_context_simple(content, summary, importance, tags)
 
-            print(f"\n💾 [AI Decision] Stored memory: {summary}")
+            print(f"\n💾 [AI Decision] Stored memory for user '{self.user_id}': {summary}")
             print(f"   Importance: {importance} | Tags: {tags_str}")
 
             # Emit progress if callback available
@@ -1175,13 +1173,15 @@ Tags: {tags_str}
                 "summary": summary,
                 "importance": importance,
                 "tags": tags or [],
-                "timestamp": timestamp
+                "timestamp": timestamp,
+                "user_id": self.user_id
             })
 
             return json.dumps({
                 "success": True,
-                "message": f"Memory stored successfully: {summary}",
-                "timestamp": timestamp
+                "message": f"Memory stored successfully in graph memory: {summary}",
+                "timestamp": timestamp,
+                "user_id": self.user_id
             })
 
         except Exception as e:
@@ -1889,16 +1889,12 @@ User Question: {question}"""
 
 
 def main():
-    parser = argparse.ArgumentParser(description='AI Background Companion with Content Generation and RAG-based Context Retrieval')
+    parser = argparse.ArgumentParser(description='AI Background Companion with Content Generation and RAG-based Context Retrieval using Mem0 Graph Memory')
     parser.add_argument('mode', choices=['capture', 'query', 'list', 'reindex', 'autonomous'],
                        help='Mode: capture, query, list, reindex, or autonomous')
     parser.add_argument('--api-key', required=True, help='Google Gemini API key')
-    parser.add_argument('--supermemory-api-key', type=str,
-                       help='Supermemory API key (optional, can also use SUPERMEMORY_API_KEY env var)')
-    parser.add_argument('--use-supermemory', action='store_true', default=True,
-                       help='Use Supermemory API for context retrieval (default: True)')
-    parser.add_argument('--no-supermemory', action='store_false', dest='use_supermemory',
-                       help='Disable Supermemory and use local database only')
+    parser.add_argument('--user-id', type=str, default='default_user',
+                       help='User ID for per-user memory separation (default: default_user)')
     parser.add_argument('--interval', type=int, default=60,
                        help='Capture interval in seconds (default: 60)')
     parser.add_argument('--watch-dirs', nargs='+',
@@ -1928,8 +1924,7 @@ def main():
         autonomous_mode=(args.mode == 'autonomous'),
         autonomous_interval=args.autonomous_interval,
         autonomous_output=args.autonomous_output,
-        supermemory_api_key=args.supermemory_api_key,
-        use_supermemory=args.use_supermemory
+        user_id=args.user_id
     )
     
     if args.mode == 'capture':
