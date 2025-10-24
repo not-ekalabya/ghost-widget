@@ -39,6 +39,14 @@ except ImportError:
     CLAUDE_AVAILABLE = False
     print("Warning: anthropic package not installed. Install with: pip install 'anthropic[vertex]'")
 
+# GitHub integration
+try:
+    from github_auth import get_github_auth
+    GITHUB_AVAILABLE = True
+except ImportError:
+    GITHUB_AVAILABLE = False
+    print("Warning: GitHub integration not available. Install with: pip install PyGithub")
+
 class BackgroundCompanion:
     def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini"):
         """
@@ -302,6 +310,201 @@ class BackgroundCompanion:
                                 }
                             },
                             "required": ["content", "summary", "importance"]
+                        }
+                    },
+                    {
+                        "name": "github_get_commits",
+                        "description": "Get recent commits from a GitHub repository. Requires GitHub authentication. Use this to get commit history, messages, authors, and code changes for blog posts or analysis.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo' (e.g., 'facebook/react', 'torvalds/linux')"
+                                },
+                                "count": {
+                                    "type": "number",
+                                    "description": "Number of commits to retrieve (default: 10, max: 50)"
+                                }
+                            },
+                            "required": ["repo_name"]
+                        }
+                    },
+                    {
+                        "name": "github_get_repo_info",
+                        "description": "Get detailed information about a GitHub repository including description, stars, forks, language, etc. Requires GitHub authentication.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo' (e.g., 'facebook/react', 'anthropics/anthropic-sdk-python')"
+                                }
+                            },
+                            "required": ["repo_name"]
+                        }
+                    },
+                    {
+                        "name": "github_search_repos",
+                        "description": "Search for GitHub repositories by keyword. Requires GitHub authentication. Useful for finding repositories related to a topic.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "Search query (e.g., 'machine learning python', 'react hooks', 'rust game engine')"
+                                },
+                                "max_results": {
+                                    "type": "number",
+                                    "description": "Maximum number of results to return (default: 10)"
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    },
+                    {
+                        "name": "github_get_user_repos",
+                        "description": "Get all repositories for the authenticated GitHub user, sorted by most recently updated. Use this to discover and search through the user's repositories when they mention a project name without specifying the full repository path. Returns a list with 'full_name' field that contains the complete 'owner/repo' format you should use with other GitHub tools.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "max_results": {
+                                    "type": "number",
+                                    "description": "Maximum number of repositories to return (default: 100)"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "name": "github_get_readme",
+                        "description": "Get the README content from a GitHub repository. Useful for understanding what a repository is about and finding the right repository based on its description and documentation.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo' (e.g., 'facebook/react')"
+                                }
+                            },
+                            "required": ["repo_name"]
+                        }
+                    },
+                    {
+                        "name": "github_get_pull_requests",
+                        "description": "Get pull requests from a GitHub repository. Returns comprehensive PR information including state, author, changes, reviews, and merge status.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo'"
+                                },
+                                "state": {
+                                    "type": "string",
+                                    "description": "PR state: 'open', 'closed', or 'all' (default: 'all')",
+                                    "enum": ["open", "closed", "all"]
+                                },
+                                "max_results": {
+                                    "type": "number",
+                                    "description": "Maximum number of PRs to return (default: 30)"
+                                }
+                            },
+                            "required": ["repo_name"]
+                        }
+                    },
+                    {
+                        "name": "github_get_issues",
+                        "description": "Get issues from a GitHub repository. Returns issue information including state, labels, assignees, and comments.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo'"
+                                },
+                                "state": {
+                                    "type": "string",
+                                    "description": "Issue state: 'open', 'closed', or 'all' (default: 'all')",
+                                    "enum": ["open", "closed", "all"]
+                                },
+                                "max_results": {
+                                    "type": "number",
+                                    "description": "Maximum number of issues to return (default: 30)"
+                                }
+                            },
+                            "required": ["repo_name"]
+                        }
+                    },
+                    {
+                        "name": "github_get_branches",
+                        "description": "Get branches from a GitHub repository. Returns branch names, protection status, and latest commit information.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo'"
+                                },
+                                "max_results": {
+                                    "type": "number",
+                                    "description": "Maximum number of branches to return (default: 30)"
+                                }
+                            },
+                            "required": ["repo_name"]
+                        }
+                    },
+                    {
+                        "name": "github_get_commit_details",
+                        "description": "Get detailed information about a specific commit including file changes, diffs, and statistics. Use this to analyze what changed in a particular commit.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo'"
+                                },
+                                "commit_sha": {
+                                    "type": "string",
+                                    "description": "The commit SHA or hash to retrieve details for"
+                                }
+                            },
+                            "required": ["repo_name", "commit_sha"]
+                        }
+                    },
+                    {
+                        "name": "github_get_contributors",
+                        "description": "Get contributors to a GitHub repository. Returns contributor usernames, contribution counts, and profile information.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo'"
+                                },
+                                "max_results": {
+                                    "type": "number",
+                                    "description": "Maximum number of contributors to return (default: 30)"
+                                }
+                            },
+                            "required": ["repo_name"]
+                        }
+                    },
+                    {
+                        "name": "github_get_releases",
+                        "description": "Get releases from a GitHub repository. Returns release tags, names, dates, release notes, and download URLs.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo'"
+                                },
+                                "max_results": {
+                                    "type": "number",
+                                    "description": "Maximum number of releases to return (default: 10)"
+                                }
+                            },
+                            "required": ["repo_name"]
                         }
                     },
                 ]
@@ -1390,6 +1593,351 @@ Tags: {tags_str}
         except Exception as e:
             print(f"Warning: Could not store to local database: {e}")
 
+    def github_get_commits(self, repo_name: str, count: int = 10) -> str:
+        """
+        Get recent commits from a GitHub repository
+
+        Args:
+            repo_name: Repository name in format "owner/repo"
+            count: Number of commits to retrieve (max 50)
+
+        Returns:
+            JSON string with commits data or error
+        """
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({
+                    "success": False,
+                    "error": "GitHub integration not available. Install PyGithub: pip install PyGithub"
+                })
+
+            github_auth = get_github_auth()
+
+            if not github_auth.is_authenticated():
+                return json.dumps({
+                    "success": False,
+                    "error": "Not authenticated with GitHub. Please sign in with GitHub first."
+                })
+
+            # Limit count to reasonable max
+            count = min(count, 50)
+
+            commits = github_auth.get_latest_commits(repo_name, count)
+
+            if commits is None:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Could not fetch commits from repository: {repo_name}. Repository may not exist or you may not have access."
+                })
+
+            return json.dumps({
+                "success": True,
+                "repo_name": repo_name,
+                "commit_count": len(commits),
+                "commits": commits
+            }, indent=2)
+
+        except Exception as e:
+            return json.dumps({
+                "success": False,
+                "error": f"Error fetching commits: {str(e)}"
+            })
+
+    def github_get_repo_info(self, repo_name: str) -> str:
+        """
+        Get information about a GitHub repository
+
+        Args:
+            repo_name: Repository name in format "owner/repo"
+
+        Returns:
+            JSON string with repository data or error
+        """
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({
+                    "success": False,
+                    "error": "GitHub integration not available. Install PyGithub: pip install PyGithub"
+                })
+
+            github_auth = get_github_auth()
+
+            if not github_auth.is_authenticated():
+                return json.dumps({
+                    "success": False,
+                    "error": "Not authenticated with GitHub. Please sign in with GitHub first."
+                })
+
+            repo_info = github_auth.get_repository_info(repo_name)
+
+            if repo_info is None:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Could not fetch repository info: {repo_name}. Repository may not exist or you may not have access."
+                })
+
+            return json.dumps({
+                "success": True,
+                "repository": repo_info
+            }, indent=2)
+
+        except Exception as e:
+            return json.dumps({
+                "success": False,
+                "error": f"Error fetching repository info: {str(e)}"
+            })
+
+    def github_search_repos(self, query: str, max_results: int = 10) -> str:
+        """
+        Search for GitHub repositories
+
+        Args:
+            query: Search query
+            max_results: Maximum number of results (default 10)
+
+        Returns:
+            JSON string with search results or error
+        """
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({
+                    "success": False,
+                    "error": "GitHub integration not available. Install PyGithub: pip install PyGithub"
+                })
+
+            github_auth = get_github_auth()
+
+            if not github_auth.is_authenticated():
+                return json.dumps({
+                    "success": False,
+                    "error": "Not authenticated with GitHub. Please sign in with GitHub first."
+                })
+
+            results = github_auth.search_repositories(query, max_results)
+
+            if results is None:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Could not search repositories with query: {query}"
+                })
+
+            return json.dumps({
+                "success": True,
+                "query": query,
+                "result_count": len(results),
+                "repositories": results
+            }, indent=2)
+
+        except Exception as e:
+            return json.dumps({
+                "success": False,
+                "error": f"Error searching repositories: {str(e)}"
+            })
+
+    def github_get_user_repos(self, max_results: int = 100) -> str:
+        """
+        Get all repositories for the authenticated user
+
+        Args:
+            max_results: Maximum number of repositories to return (default 100)
+
+        Returns:
+            JSON string with user's repositories or error
+        """
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({
+                    "success": False,
+                    "error": "GitHub integration not available. Install PyGithub: pip install PyGithub"
+                })
+
+            github_auth = get_github_auth()
+
+            if not github_auth.is_authenticated():
+                return json.dumps({
+                    "success": False,
+                    "error": "Not authenticated with GitHub. Please sign in with GitHub first."
+                })
+
+            repositories = github_auth.get_user_repositories(max_results)
+
+            if repositories is None:
+                return json.dumps({
+                    "success": False,
+                    "error": "Could not fetch user repositories"
+                })
+
+            return json.dumps({
+                "success": True,
+                "repo_count": len(repositories),
+                "repositories": repositories
+            }, indent=2)
+
+        except Exception as e:
+            return json.dumps({
+                "success": False,
+                "error": f"Error fetching user repositories: {str(e)}"
+            })
+
+    def github_get_readme(self, repo_name: str) -> str:
+        """
+        Get README content from a repository
+
+        Args:
+            repo_name: Repository name in format "owner/repo"
+
+        Returns:
+            JSON string with README content or error
+        """
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({
+                    "success": False,
+                    "error": "GitHub integration not available. Install PyGithub: pip install PyGithub"
+                })
+
+            github_auth = get_github_auth()
+
+            if not github_auth.is_authenticated():
+                return json.dumps({
+                    "success": False,
+                    "error": "Not authenticated with GitHub. Please sign in with GitHub first."
+                })
+
+            readme_info = github_auth.get_repository_readme(repo_name)
+
+            if readme_info is None:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Could not fetch README from repository: {repo_name}"
+                })
+
+            if 'error' in readme_info:
+                return json.dumps({
+                    "success": False,
+                    "error": readme_info['error']
+                })
+
+            return json.dumps({
+                "success": True,
+                "repo_name": repo_name,
+                "readme": readme_info
+            }, indent=2)
+
+        except Exception as e:
+            return json.dumps({
+                "success": False,
+                "error": f"Error fetching README: {str(e)}"
+            })
+
+    def github_get_pull_requests(self, repo_name: str, state: str = 'all', max_results: int = 30) -> str:
+        """Get pull requests from a repository"""
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({"success": False, "error": "GitHub integration not available"})
+
+            github_auth = get_github_auth()
+            if not github_auth.is_authenticated():
+                return json.dumps({"success": False, "error": "Not authenticated with GitHub"})
+
+            prs = github_auth.get_pull_requests(repo_name, state, max_results)
+            if prs is None:
+                return json.dumps({"success": False, "error": f"Could not fetch PRs from {repo_name}"})
+
+            return json.dumps({"success": True, "repo_name": repo_name, "pr_count": len(prs), "pull_requests": prs}, indent=2)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
+    def github_get_issues(self, repo_name: str, state: str = 'all', max_results: int = 30) -> str:
+        """Get issues from a repository"""
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({"success": False, "error": "GitHub integration not available"})
+
+            github_auth = get_github_auth()
+            if not github_auth.is_authenticated():
+                return json.dumps({"success": False, "error": "Not authenticated with GitHub"})
+
+            issues = github_auth.get_issues(repo_name, state, max_results)
+            if issues is None:
+                return json.dumps({"success": False, "error": f"Could not fetch issues from {repo_name}"})
+
+            return json.dumps({"success": True, "repo_name": repo_name, "issue_count": len(issues), "issues": issues}, indent=2)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
+    def github_get_branches(self, repo_name: str, max_results: int = 30) -> str:
+        """Get branches from a repository"""
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({"success": False, "error": "GitHub integration not available"})
+
+            github_auth = get_github_auth()
+            if not github_auth.is_authenticated():
+                return json.dumps({"success": False, "error": "Not authenticated with GitHub"})
+
+            branches = github_auth.get_branches(repo_name, max_results)
+            if branches is None:
+                return json.dumps({"success": False, "error": f"Could not fetch branches from {repo_name}"})
+
+            return json.dumps({"success": True, "repo_name": repo_name, "branch_count": len(branches), "branches": branches}, indent=2)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
+    def github_get_commit_details(self, repo_name: str, commit_sha: str) -> str:
+        """Get detailed information about a specific commit"""
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({"success": False, "error": "GitHub integration not available"})
+
+            github_auth = get_github_auth()
+            if not github_auth.is_authenticated():
+                return json.dumps({"success": False, "error": "Not authenticated with GitHub"})
+
+            commit = github_auth.get_commit_details(repo_name, commit_sha)
+            if commit is None:
+                return json.dumps({"success": False, "error": f"Could not fetch commit {commit_sha} from {repo_name}"})
+
+            return json.dumps({"success": True, "repo_name": repo_name, "commit": commit}, indent=2)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
+    def github_get_contributors(self, repo_name: str, max_results: int = 30) -> str:
+        """Get contributors to a repository"""
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({"success": False, "error": "GitHub integration not available"})
+
+            github_auth = get_github_auth()
+            if not github_auth.is_authenticated():
+                return json.dumps({"success": False, "error": "Not authenticated with GitHub"})
+
+            contributors = github_auth.get_contributors(repo_name, max_results)
+            if contributors is None:
+                return json.dumps({"success": False, "error": f"Could not fetch contributors from {repo_name}"})
+
+            return json.dumps({"success": True, "repo_name": repo_name, "contributor_count": len(contributors), "contributors": contributors}, indent=2)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
+    def github_get_releases(self, repo_name: str, max_results: int = 10) -> str:
+        """Get releases from a repository"""
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({"success": False, "error": "GitHub integration not available"})
+
+            github_auth = get_github_auth()
+            if not github_auth.is_authenticated():
+                return json.dumps({"success": False, "error": "Not authenticated with GitHub"})
+
+            releases = github_auth.get_releases(repo_name, max_results)
+            if releases is None:
+                return json.dumps({"success": False, "error": f"Could not fetch releases from {repo_name}"})
+
+            return json.dumps({"success": True, "repo_name": repo_name, "release_count": len(releases), "releases": releases}, indent=2)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
     def search_web(self, query: str) -> str:
         """
         Search the web using Google's grounding feature via a separate Gemini instance
@@ -1486,6 +2034,49 @@ Be detailed and informative."""
                 summary=args.get("summary", ""),
                 importance=args.get("importance", "medium"),
                 tags=args.get("tags", None)
+            ),
+            "github_get_commits": lambda: self.github_get_commits(
+                repo_name=args.get("repo_name", ""),
+                count=int(args.get("count", 10))
+            ),
+            "github_get_repo_info": lambda: self.github_get_repo_info(
+                repo_name=args.get("repo_name", "")
+            ),
+            "github_search_repos": lambda: self.github_search_repos(
+                query=args.get("query", ""),
+                max_results=int(args.get("max_results", 10))
+            ),
+            "github_get_user_repos": lambda: self.github_get_user_repos(
+                max_results=int(args.get("max_results", 100))
+            ),
+            "github_get_readme": lambda: self.github_get_readme(
+                repo_name=args.get("repo_name", "")
+            ),
+            "github_get_pull_requests": lambda: self.github_get_pull_requests(
+                repo_name=args.get("repo_name", ""),
+                state=args.get("state", "all"),
+                max_results=int(args.get("max_results", 30))
+            ),
+            "github_get_issues": lambda: self.github_get_issues(
+                repo_name=args.get("repo_name", ""),
+                state=args.get("state", "all"),
+                max_results=int(args.get("max_results", 30))
+            ),
+            "github_get_branches": lambda: self.github_get_branches(
+                repo_name=args.get("repo_name", ""),
+                max_results=int(args.get("max_results", 30))
+            ),
+            "github_get_commit_details": lambda: self.github_get_commit_details(
+                repo_name=args.get("repo_name", ""),
+                commit_sha=args.get("commit_sha", "")
+            ),
+            "github_get_contributors": lambda: self.github_get_contributors(
+                repo_name=args.get("repo_name", ""),
+                max_results=int(args.get("max_results", 30))
+            ),
+            "github_get_releases": lambda: self.github_get_releases(
+                repo_name=args.get("repo_name", ""),
+                max_results=int(args.get("max_results", 10))
             )
         }
 
@@ -1818,59 +2409,88 @@ FILE SYSTEM TOOLS:
 - read_file_with_vision: Use AI vision to analyze any file including images, PDFs, and complex documents
 - list_directory: List directory contents
 - get_file_info: Get file metadata
-- search_files: Search for SPECIFIC files by name/pattern (ONLY when you have a concrete file name from context):
-  * pattern: Specific file name (e.g., "report.pdf", "main.py")
-  * search_scope: "watched" (default), "home", or "desktop" only
-  * **WARNING: This is slow. ONLY use when you have a specific file name from the captured context!**
-  * **If you don't know the file name or location, ASK THE USER instead of searching!**
+- search_files: Search for SPECIFIC files by name/pattern (ONLY when you have a concrete file name from context)
 - get_recent_files: Get recently modified files from watched directories
+
+GITHUB TOOLS (Full Access to User's Repositories):
+- github_get_user_repos: List all user's repositories (public and private)
+- github_get_commits: Get commit history from a repository
+- github_get_commit_details: Get detailed info about a specific commit (file changes, diffs, stats)
+- github_get_repo_info: Get repository metadata (description, stars, language, etc.)
+- github_get_readme: Read README files from repositories
+- github_get_pull_requests: Get PRs with state, author, changes, merge status
+- github_get_issues: Get issues with labels, assignees, comments
+- github_get_branches: List repository branches
+- github_get_contributors: Get contributor information
+- github_get_releases: Get release history with notes and downloads
+- github_search_repos: Search for repositories by keyword
 
 WEB SEARCH TOOL:
 - search_web: Search the web for current information, facts, news, or real-time data
-  Use this when you need:
-  * Current/recent information not in the captured contexts
-  * Up-to-date facts, statistics, or news
-  * Real-time data (weather, stock prices, etc.)
-  * Verification of information
 
-IMPORTANT GUIDELINES:
+CRITICAL: BE PROACTIVE AND USE YOUR TOOLS!
 
-1. **SMART FILE HANDLING STRATEGY (behave like a sane human):**
+**DON'T SAY "I don't have enough context" WHEN YOU HAVE TOOLS TO GET IT!**
 
-   **WHEN YOU SEE FILE PATHS IN THE CONTEXT:**
-   - Use those exact paths directly with read_file_as_text or read_file_with_vision
-   - Don't search - you already have the path!
+If the user asks about:
+- **Code/files**: Use file reading tools or GitHub tools to explore and find the answer
+- **GitHub repositories**: Use github_get_user_repos to discover repositories, then use other GitHub tools
+- **Commits**: Use github_get_commits and github_get_commit_details to analyze commits
+- **Codebase structure**: Use list_directory and read_file_as_text to explore
+- **Project capabilities**: Read the README, source code files, and configuration files
 
-   **WHEN USER ASKS ABOUT A FILE YOU DON'T HAVE THE PATH FOR:**
-   - First check: Is there a similar file name in the recent files list?
-   - If YES and it seems related: Use that path
-   - If NO or UNSURE: **ASK THE USER** for the file path
-   - DO NOT blindly search through directories hoping to find it
+**EXPLORATION STRATEGY:**
 
-   **ONLY USE search_files WHEN:**
-   - You saw the exact file name in a recent context (e.g., "report.pdf")
-   - You're 90% sure it's in watched/home/desktop directories
-   - It's a common file in a predictable location (e.g., "config.json" on desktop)
+1. **For questions about codebases/projects:**
+   - FIRST: Look at the "All Files Accessed During Retrieved Contexts" section above - these are FULL ABSOLUTE PATHS
+   - Use github_get_user_repos to find the repository
+   - Read README files with github_get_readme
+   - Use list_directory with FULL ABSOLUTE PATHS from the context (e.g., C:\\projects\\ghost-widget)
+   - Read relevant source files with read_file_as_text using FULL ABSOLUTE PATHS from context
+   - Check commits with github_get_commits
 
-   **NEVER DO THIS:**
-   - ❌ "Let me search the entire computer for you..." (NO!)
-   - ❌ Searching with vague patterns like "*.txt" or "*report*"
-   - ❌ Multiple search attempts with different patterns
-   - ❌ Searching when you have zero clues about the file
+2. **For questions about specific features/functionality:**
+   - Find and read the relevant source code files using FULL ABSOLUTE PATHS from the context above
+   - Check recent commits for changes
+   - Look at file structure and dependencies
 
-   **INSTEAD DO THIS:**
-   - ✅ "I can see you were working on C:\\Users\\John\\Documents\\report.pdf. Let me read that file."
-   - ✅ "I don't have the path to that file. Could you please provide the full file path?"
-   - ✅ "I see you mentioned 'config.json' - let me check your desktop for it."
+3. **For questions about GitHub activity:**
+   - Use github_get_commits for commit history
+   - Use github_get_commit_details for specific commit analysis
+   - Use github_get_pull_requests and github_get_issues for project activity
 
-2. For Word documents (.docx), PDFs, and other complex documents:
-   - read_file_as_text: to get extracted text content
-   - read_file_with_vision: for comprehensive AI analysis
+**CRITICAL: ALWAYS USE FULL ABSOLUTE PATHS FROM MEMORY CONTEXT!**
 
-3. Always read relevant files first to gather information before answering
-4. Use search_web when you need current information beyond the stored contexts
-5. Provide detailed, well-structured answers
-6. **When in doubt, ASK THE USER - don't waste time searching randomly!**
+**When using file/directory tools:**
+- ✅ CORRECT: Use full absolute paths from "All Files Accessed During Retrieved Contexts" section (e.g., C:\\projects\\ghost-widget\\backend.py)
+- ✅ CORRECT: Use full absolute paths from "Active Files" in context entries (e.g., C:\\Users\\Name\\Documents\\file.txt)
+- ❌ WRONG: Using relative paths (e.g., "ghost-widget" or "backend.py")
+- ❌ WRONG: Using partial paths (e.g., "Documents\\file.txt")
+- ❌ WRONG: Guessing paths or using project names as paths
+
+**Path Extraction Examples:**
+- If context shows: "C:\\projects\\ghost-widget\\backend.py" → Use exactly this path
+- If you see "ghost-widget" mentioned → Look in the file lists above for paths containing "ghost-widget"
+- If no path available → Use get_recent_files to discover paths, or ASK the user
+
+**SMART FILE HANDLING:**
+1. ALWAYS check the "All Files Accessed During Retrieved Contexts" section FIRST
+2. Use those EXACT FULL PATHS - don't modify or shorten them
+3. If you need to list a directory, extract the directory path from file paths (e.g., C:\\projects\\ghost-widget\\backend.py → C:\\projects\\ghost-widget)
+4. Use get_recent_files to discover more file paths if needed
+5. Only use search_files with specific file names as a last resort
+6. ASK the user for paths only when you've exhausted all other options
+
+**NEVER SAY:**
+- ❌ "I don't have enough context to answer"
+- ❌ "The retrieved contexts don't contain information about..."
+- ❌ "I would need access to..."
+
+**INSTEAD:**
+- ✅ Use your tools proactively to gather the information
+- ✅ "Let me check the codebase..." then use file/GitHub tools
+- ✅ "Let me look at the repository..." then use GitHub tools
+- ✅ "Let me explore the project structure..." then use directory/file tools
 
 User Question: {question}"""
         
@@ -2128,7 +2748,7 @@ User Question: {question}"""
         claude_tools = self._get_claude_tools()
 
         # Build the system prompt with tool descriptions
-        system_prompt = f"""You are a helpful AI assistant with access to the user's screen activity context and file system tools.
+        system_prompt = f"""You are a helpful AI assistant with access to the user's screen activity context, file system tools, and GitHub integration.
 
 Based on the following context captured from screen activity (retrieved using semantic search):
 
@@ -2144,32 +2764,92 @@ IMPORTANT CONTEXT RETRIEVAL INFO:
 You have access to the following tools:
 
 FILE SYSTEM TOOLS:
-- read_file_as_text: Read text-based files (code, documents, PDFs, Word docs, Excel, etc.) and get extracted text
+- read_file_as_text: Read text-based files (code, documents, PDFs, Word docs, Excel, etc.)
 - read_file_with_vision: Use AI vision to analyze any file including images, PDFs, and complex documents
 - list_directory: List directory contents
 - get_file_info: Get file metadata
-- search_files: Search for SPECIFIC files by name/pattern (ONLY when you have a concrete file name from context)
+- search_files: Search for SPECIFIC files by name/pattern
 - get_recent_files: Get recently modified files from watched directories
+
+GITHUB TOOLS (Full Access to User's Repositories):
+- github_get_user_repos: List all user's repositories (public and private)
+- github_get_commits: Get commit history from a repository
+- github_get_commit_details: Get detailed info about a specific commit (file changes, diffs, stats)
+- github_get_repo_info: Get repository metadata (description, stars, language, etc.)
+- github_get_readme: Read README files from repositories
+- github_get_pull_requests: Get PRs with state, author, changes, merge status
+- github_get_issues: Get issues with labels, assignees, comments
+- github_get_branches: List repository branches
+- github_get_contributors: Get contributor information
+- github_get_releases: Get release history with notes and downloads
+- github_search_repos: Search for repositories by keyword
 
 WEB SEARCH TOOL:
 - search_web: Search the web for current information, facts, news, or real-time data
 
-IMPORTANT GUIDELINES:
+CRITICAL: BE PROACTIVE AND USE YOUR TOOLS!
 
-1. **SMART FILE HANDLING STRATEGY:**
-   - When you see file paths in the context, use those exact paths directly
-   - Don't search when you already have the path
-   - When user asks about a file you don't have the path for, ASK THE USER for the path
-   - Only use search_files when you saw the exact file name in a recent context
+**DON'T SAY "I don't have enough context" WHEN YOU HAVE TOOLS TO GET IT!**
 
-2. For Word documents (.docx), PDFs, and other complex documents:
-   - Use read_file_as_text to get extracted text content
-   - Use read_file_with_vision for comprehensive AI analysis
+If the user asks about:
+- **Code/files**: Use file reading tools or GitHub tools to explore and find the answer
+- **GitHub repositories**: Use github_get_user_repos to discover repositories, then use other GitHub tools
+- **Commits**: Use github_get_commits and github_get_commit_details to analyze commits
+- **Codebase structure**: Use list_directory and read_file_as_text to explore
+- **Project capabilities**: Read the README, source code files, and configuration files
 
-3. Always read relevant files first to gather information before answering
-4. Use search_web when you need current information beyond the stored contexts
-5. Provide detailed, well-structured answers
-6. When in doubt, ASK THE USER - don't waste time searching randomly!"""
+**EXPLORATION STRATEGY:**
+
+1. **For questions about codebases/projects:**
+   - FIRST: Look at the "All Files Accessed During Retrieved Contexts" section above - these are FULL ABSOLUTE PATHS
+   - Use github_get_user_repos to find the repository
+   - Read README files with github_get_readme
+   - Use list_directory with FULL ABSOLUTE PATHS from the context (e.g., C:\\projects\\ghost-widget)
+   - Read relevant source files with read_file_as_text using FULL ABSOLUTE PATHS from context
+   - Check commits with github_get_commits
+
+2. **For questions about specific features/functionality:**
+   - Find and read the relevant source code files using FULL ABSOLUTE PATHS from the context above
+   - Check recent commits for changes
+   - Look at file structure and dependencies
+
+3. **For questions about GitHub activity:**
+   - Use github_get_commits for commit history
+   - Use github_get_commit_details for specific commit analysis
+   - Use github_get_pull_requests and github_get_issues for project activity
+
+**CRITICAL: ALWAYS USE FULL ABSOLUTE PATHS FROM MEMORY CONTEXT!**
+
+**When using file/directory tools:**
+- ✅ CORRECT: Use full absolute paths from "All Files Accessed During Retrieved Contexts" section (e.g., C:\\projects\\ghost-widget\\backend.py)
+- ✅ CORRECT: Use full absolute paths from "Active Files" in context entries (e.g., C:\\Users\\Name\\Documents\\file.txt)
+- ❌ WRONG: Using relative paths (e.g., "ghost-widget" or "backend.py")
+- ❌ WRONG: Using partial paths (e.g., "Documents\\file.txt")
+- ❌ WRONG: Guessing paths or using project names as paths
+
+**Path Extraction Examples:**
+- If context shows: "C:\\projects\\ghost-widget\\backend.py" → Use exactly this path
+- If you see "ghost-widget" mentioned → Look in the file lists above for paths containing "ghost-widget"
+- If no path available → Use get_recent_files to discover paths, or ASK the user
+
+**SMART FILE HANDLING:**
+1. ALWAYS check the "All Files Accessed During Retrieved Contexts" section FIRST
+2. Use those EXACT FULL PATHS - don't modify or shorten them
+3. If you need to list a directory, extract the directory path from file paths (e.g., C:\\projects\\ghost-widget\\backend.py → C:\\projects\\ghost-widget)
+4. Use get_recent_files to discover more file paths if needed
+5. Only use search_files with specific file names as a last resort
+6. ASK the user for paths only when you've exhausted all other options
+
+**NEVER SAY:**
+- ❌ "I don't have enough context to answer"
+- ❌ "The retrieved contexts don't contain information about..."
+- ❌ "I would need access to..."
+
+**INSTEAD:**
+- ✅ Use your tools proactively to gather the information
+- ✅ "Let me check the codebase..." then use file/GitHub tools
+- ✅ "Let me look at the repository..." then use GitHub tools
+- ✅ "Let me explore the project structure..." then use directory/file tools"""
 
         try:
             # Start conversation with Claude
@@ -2444,6 +3124,202 @@ IMPORTANT GUIDELINES:
                         }
                     },
                     "required": ["query"]
+                }
+            },
+            {
+                "name": "github_get_commits",
+                "description": "Get recent commits from a GitHub repository. Requires GitHub authentication. Use this to get commit history, messages, authors, and code changes for blog posts or analysis.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo' (e.g., 'facebook/react', 'torvalds/linux')"
+                        },
+                        "count": {
+                            "type": "integer",
+                            "description": "Number of commits to retrieve (default: 10, max: 50)"
+                        }
+                    },
+                    "required": ["repo_name"]
+                }
+            },
+            {
+                "name": "github_get_repo_info",
+                "description": "Get detailed information about a GitHub repository including description, stars, forks, language, etc. Requires GitHub authentication.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo' (e.g., 'facebook/react', 'anthropics/anthropic-sdk-python')"
+                        }
+                    },
+                    "required": ["repo_name"]
+                }
+            },
+            {
+                "name": "github_search_repos",
+                "description": "Search for GitHub repositories by keyword. Requires GitHub authentication. Useful for finding repositories related to a topic.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query (e.g., 'machine learning python', 'react hooks', 'rust game engine')"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of results to return (default: 10)"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "github_get_user_repos",
+                "description": "Get all repositories for the authenticated GitHub user, sorted by most recently updated. Use this to discover and search through the user's repositories when they mention a project name without specifying the full repository path. IMPORTANT: The results include a 'full_name' field (e.g., 'ekalabya/ghost-widget') which is the complete 'owner/repo' format you MUST use with other GitHub tools like github_get_commits.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of repositories to return (default: 100)"
+                        }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "github_get_readme",
+                "description": "Get the README content from a GitHub repository. Useful for understanding what a repository is about and finding the right repository based on its description and documentation.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo' (e.g., 'facebook/react')"
+                        }
+                    },
+                    "required": ["repo_name"]
+                }
+            },
+            {
+                "name": "github_get_pull_requests",
+                "description": "Get pull requests from a GitHub repository. Returns comprehensive PR information including state, author, changes, reviews, and merge status.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo'"
+                        },
+                        "state": {
+                            "type": "string",
+                            "description": "PR state: 'open', 'closed', or 'all' (default: 'all')",
+                            "enum": ["open", "closed", "all"]
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of PRs to return (default: 30)"
+                        }
+                    },
+                    "required": ["repo_name"]
+                }
+            },
+            {
+                "name": "github_get_issues",
+                "description": "Get issues from a GitHub repository. Returns issue information including state, labels, assignees, and comments.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo'"
+                        },
+                        "state": {
+                            "type": "string",
+                            "description": "Issue state: 'open', 'closed', or 'all' (default: 'all')",
+                            "enum": ["open", "closed", "all"]
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of issues to return (default: 30)"
+                        }
+                    },
+                    "required": ["repo_name"]
+                }
+            },
+            {
+                "name": "github_get_branches",
+                "description": "Get branches from a GitHub repository. Returns branch names, protection status, and latest commit information.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo'"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of branches to return (default: 30)"
+                        }
+                    },
+                    "required": ["repo_name"]
+                }
+            },
+            {
+                "name": "github_get_commit_details",
+                "description": "Get detailed information about a specific commit including file changes, diffs, and statistics. Use this to analyze what changed in a particular commit.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo'"
+                        },
+                        "commit_sha": {
+                            "type": "string",
+                            "description": "The commit SHA or hash to retrieve details for"
+                        }
+                    },
+                    "required": ["repo_name", "commit_sha"]
+                }
+            },
+            {
+                "name": "github_get_contributors",
+                "description": "Get contributors to a GitHub repository. Returns contributor usernames, contribution counts, and profile information.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo'"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of contributors to return (default: 30)"
+                        }
+                    },
+                    "required": ["repo_name"]
+                }
+            },
+            {
+                "name": "github_get_releases",
+                "description": "Get releases from a GitHub repository. Returns release tags, names, dates, release notes, and download URLs.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo'"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum number of releases to return (default: 10)"
+                        }
+                    },
+                    "required": ["repo_name"]
                 }
             }
         ]

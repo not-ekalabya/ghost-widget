@@ -45,6 +45,14 @@ except Exception as e:
     FIREBASE_AVAILABLE = False
     _firebase_import_error = str(e)
 
+# Import GitHub Auth
+try:
+    from github_auth import get_github_auth
+    GITHUB_AVAILABLE = True
+except Exception as e:
+    GITHUB_AVAILABLE = False
+    _github_import_error = str(e)
+
 USE_PYQT6 = True
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -417,6 +425,10 @@ class OverlayWindow(QWidget):
         self.auth_refresh_timer = None
         self._init_firebase_auth()
 
+        # GitHub Auth instance
+        self.github_auth = None
+        self._init_github_auth()
+
         self.init_ui()
         self.start_polling_companion_queue()
         self.start_auth_token_refresh_timer()
@@ -450,6 +462,20 @@ class OverlayWindow(QWidget):
         except Exception as e:
             print(f"Failed to initialize Firebase Auth: {e}")
             self._pending_auth_restore = None
+
+    def _init_github_auth(self):
+        """Initialize GitHub Auth"""
+        if not GITHUB_AVAILABLE:
+            return
+
+        try:
+            self.github_auth = get_github_auth()
+            if self.github_auth and self.github_auth.is_authenticated():
+                user_info = self.github_auth.get_user_info()
+                if user_info:
+                    print(f"✅ GitHub: Auto-restored session for: {user_info['login']}")
+        except Exception as e:
+            print(f"Failed to initialize GitHub Auth: {e}")
 
     def init_ui(self):
         self.setWindowTitle("Ghost Widget")
@@ -825,6 +851,67 @@ class OverlayWindow(QWidget):
         status_lbl.setStyleSheet("color: #71717A; font-size: 10px; margin-top: 10px;")
         status_lbl.setWordWrap(True)
         auth_layout.addWidget(status_lbl)
+
+        # GitHub Authentication Section
+        github_header = QLabel("GITHUB INTEGRATION")
+        github_header.setObjectName("sectionLabel")
+        github_header.setStyleSheet("margin-top: 20px;")
+        auth_layout.addWidget(github_header)
+
+        # GitHub info text
+        github_info_lbl = QLabel("Sign in with GitHub to access repository tools and generate content from commits")
+        github_info_lbl.setObjectName("fieldLabel")
+        github_info_lbl.setStyleSheet("color: #A1A1AA; font-size: 11px; margin-top: 10px;")
+        github_info_lbl.setWordWrap(True)
+        auth_layout.addWidget(github_info_lbl)
+
+        # GitHub Sign-In button
+        self.github_signin_btn = QPushButton("🔗 Sign in with GitHub")
+        self.github_signin_btn.setObjectName("githubSignInButton")
+        self.github_signin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.github_signin_btn.clicked.connect(self.on_github_signin)
+        self.github_signin_btn.setFixedHeight(50)
+        self.github_signin_btn.setStyleSheet("""
+            #githubSignInButton {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #24292E,
+                    stop:1 #1B1F23
+                );
+                color: #FFFFFF;
+                border: 1px solid #30363D;
+                border-radius: 12px;
+                font-weight: 600;
+                font-size: 14px;
+                letter-spacing: -0.2px;
+            }
+            #githubSignInButton:hover {
+                background: #30363D;
+                border: 1px solid #484F58;
+            }
+            #githubSignInButton:pressed {
+                background: #1B1F23;
+            }
+        """)
+        auth_layout.addWidget(self.github_signin_btn)
+
+        # GitHub user info
+        self.github_user_lbl = QLabel("Not connected")
+        self.github_user_lbl.setObjectName("fieldLabel")
+        self.github_user_lbl.setStyleSheet("color: #71717A; font-size: 11px; margin-top: 8px;")
+        auth_layout.addWidget(self.github_user_lbl)
+
+        # GitHub status
+        if GITHUB_AVAILABLE:
+            github_status = "GitHub Integration: Ready"
+        else:
+            github_status = "GitHub Integration: Not installed (pip install PyGithub)"
+
+        github_status_lbl = QLabel(github_status)
+        github_status_lbl.setObjectName("fieldLabel")
+        github_status_lbl.setStyleSheet("color: #71717A; font-size: 10px; margin-top: 10px;")
+        github_status_lbl.setWordWrap(True)
+        auth_layout.addWidget(github_status_lbl)
 
         auth_layout.addStretch()
 
@@ -1219,6 +1306,35 @@ class OverlayWindow(QWidget):
         # optionally clear input
         self.ask_edit.clear()
 
+    def on_github_signin(self):
+        """Handle GitHub Sign-In via OAuth Device Flow"""
+        if not self.github_auth:
+            self.signals.log.emit("<span style='color: #EF4444;'>GitHub Auth not initialized</span>")
+            return
+
+        try:
+            self.signals.log.emit("🔗 Starting GitHub authentication...")
+            self.github_signin_btn.setEnabled(False)
+            self.github_signin_btn.setText("Signing in...")
+
+            # Run sign-in in a separate thread to avoid blocking UI
+            def sign_in_thread():
+                def progress_callback(message):
+                    _from_companion_q.put(("GITHUB_PROGRESS", message))
+
+                print("🔄 Starting GitHub OAuth Device Flow...")
+                result = self.github_auth.sign_in_with_browser(progress_callback=progress_callback)
+                print(f"🔄 GitHub sign-in result: {result.get('success', False)}")
+                # Update UI from main thread via queue
+                _from_companion_q.put(("GITHUB_AUTH_RESULT", result))
+
+            threading.Thread(target=sign_in_thread, daemon=True).start()
+
+        except Exception as e:
+            self.signals.log.emit(f"<span style='color: #EF4444;'>Error: {str(e)}</span>")
+            self.github_signin_btn.setEnabled(True)
+            self.github_signin_btn.setText("🔗 Sign in with GitHub")
+
     def on_google_signin(self):
         """Handle Google Sign-In"""
         if not self.firebase_auth:
@@ -1533,6 +1649,30 @@ class OverlayWindow(QWidget):
                 # Handle progress updates from backend
                 event_type, data = payload
                 self.append_progress(event_type, data)
+            elif typ == "GITHUB_PROGRESS":
+                # Handle GitHub authentication progress updates
+                message = payload
+                self.signals.log.emit(f"<span style='color: #60A5FA;'>{message}</span>")
+            elif typ == "GITHUB_AUTH_RESULT":
+                # Handle GitHub auth result
+                print(f"📥 Received GITHUB_AUTH_RESULT in UI thread")
+                result = payload
+                if result['success']:
+                    print(f"✅ GitHub Sign-In successful: {result['user']}")
+                    self.signals.log.emit(f"<span style='color: #10B981;'>✅ {result['message']}</span>")
+
+                    # Update button
+                    self.github_signin_btn.setEnabled(False)
+                    self.github_signin_btn.setText("✓ Connected to GitHub")
+
+                    # Update user label
+                    self.github_user_lbl.setText(f"Connected as: {result['user']}")
+                    self.github_user_lbl.setStyleSheet("color: #10B981; font-size: 11px; margin-top: 8px;")
+                else:
+                    print(f"❌ GitHub Sign-In failed: {result['message']}")
+                    self.signals.log.emit(f"<span style='color: #EF4444;'>GitHub Sign-In failed: {result['message']}</span>")
+                    self.github_signin_btn.setEnabled(True)
+                    self.github_signin_btn.setText("🔗 Sign in with GitHub")
             elif typ == "GOOGLE_AUTH_RESULT":
                 # Handle Google auth result
                 print(f"📥 Received GOOGLE_AUTH_RESULT in UI thread")

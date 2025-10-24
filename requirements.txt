@@ -13,6 +13,9 @@ anthropic[vertex]>=0.18.0
 # Mem0 integration - managed platform with graph memory
 mem0ai
 
+# GitHub integration
+PyGithub>=2.0.0
+
 # GUI Framework
 PyQt6>=6.0.0
 

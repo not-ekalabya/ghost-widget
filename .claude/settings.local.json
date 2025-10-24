@@ -8,7 +8,9 @@
       "WebSearch",
       "mcp__ide__getDiagnostics",
       "WebFetch(domain:docs.mem0.ai)",
-      "WebFetch(domain:deepwiki.com)"
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(python -m py_compile:*)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []
