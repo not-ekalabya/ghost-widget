@@ -31,8 +31,16 @@ except ImportError:
     GROUNDING_AVAILABLE = False
     print("Warning: Google genai library doesn't support grounding. Using fallback search.")
 
+# Anthropic Claude on Vertex AI integration
+try:
+    from anthropic import AnthropicVertex
+    CLAUDE_AVAILABLE = True
+except ImportError:
+    CLAUDE_AVAILABLE = False
+    print("Warning: anthropic package not installed. Install with: pip install 'anthropic[vertex]'")
+
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None):
+    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini"):
         """
         Initialize the background companion with RAG support and autonomous content generation
 
@@ -47,6 +55,8 @@ class BackgroundCompanion:
             autonomous_output: File path for autonomous content
             user_id: User identifier for per-user memory separation (default: "default_user")
             progress_callback: Callback function for progress updates (for GUI)
+            qa_model: Model to use for question answering - "claude" or "gemini" (default: "gemini")
+                     Note: Screenshot analysis always uses Gemini regardless of this setting
         """
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
@@ -64,6 +74,7 @@ class BackgroundCompanion:
         self.last_autonomous_check = 0
         self.progress_callback = progress_callback  # For GUI progress updates
         self.user_id = user_id  # Store user_id for per-user memory separation
+        self.qa_model = qa_model.lower()  # Store preferred QA model ("claude" or "gemini")
 
         # Initialize Mem0 Platform with API key
         self.use_mem0 = MEM0_AVAILABLE
@@ -81,6 +92,22 @@ class BackgroundCompanion:
                 print(f"WARNING Failed to initialize Mem0: {e}")
                 print("   Falling back to local database only")
                 self.use_mem0 = False
+
+        # Initialize Claude for question answering (via Vertex AI)
+        self.claude_client = None
+        if CLAUDE_AVAILABLE:
+            try:
+                # Get Google Cloud project ID from environment or use default
+                # User should set GOOGLE_CLOUD_PROJECT environment variable
+                project_id = "ghost-widget-7000"
+                region = "us-east5"
+
+                self.claude_client = AnthropicVertex(project_id=project_id, region=region)
+                print(f"OK Claude 4.5 Sonnet initialized via Vertex AI (project: {project_id}, region: {region})")
+            except Exception as e:
+                print(f"WARNING Failed to initialize Claude on Vertex AI: {e}")
+                print("   Falling back to Gemini for question answering")
+                self.claude_client = None
 
         # Initialize database (fallback for local storage)
         self._init_database()
@@ -1677,7 +1704,18 @@ Make your decision now:"""
         print("Stopped.")
     
     def query(self, question):
-        """Query stored context using RAG-based retrieval with Gemini"""
+        """Query stored context using RAG-based retrieval with Claude or Gemini"""
+        # Use the model specified by qa_model preference
+        if self.qa_model == "claude" and self.claude_client:
+            return self._query_with_claude(question)
+        elif self.qa_model == "claude" and not self.claude_client:
+            print("⚠️ Claude selected but not available. Falling back to Gemini.")
+            return self._query_with_gemini(question)
+        else:
+            return self._query_with_gemini(question)
+
+    def _query_with_gemini(self, question):
+        """Query stored context using RAG-based retrieval with Gemini (fallback)"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -2012,7 +2050,404 @@ User Question: {question}"""
             error_details = traceback.format_exc()
             print(f"Full error traceback:\n{error_details}")
             return f"Error querying: {str(e)}\n\nPlease check that:\n1. Your API key is valid\n2. You have internet connection\n3. The Gemini API is accessible"
-    
+
+    def _query_with_claude(self, question):
+        """Query stored context using RAG-based retrieval with Claude 4.5 Sonnet"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Check if we have any contexts
+        cursor.execute('SELECT COUNT(*) FROM context_snapshots')
+        count = cursor.fetchone()[0]
+        conn.close()
+
+        if count == 0:
+            return "No context stored yet. Start capturing first!"
+
+        print(f"\n{'='*60}")
+        print("🤖 PROCESSING YOUR QUESTION WITH CLAUDE 4.5 SONNET")
+        print(f"{'='*60}")
+        print(f"\n🔍 Step 1: Searching through {count} stored contexts...")
+
+        # Emit progress: Memory search started
+        self._emit_progress("MEMORY_SEARCH", {
+            "status": "Searching",
+            "count": count
+        })
+
+        # Use RAG to retrieve relevant contexts
+        relevant_contexts = self._retrieve_relevant_contexts(question, top_k=10)
+
+        if not relevant_contexts:
+            return "No relevant context found. Try capturing more activity!"
+
+        # Build context string with file information
+        context_parts = []
+        all_files = set()
+
+        print(f"\n📊 Step 2: Retrieved {len(relevant_contexts)} relevant contexts:")
+        print(f"{'─'*60}")
+
+        # Emit progress: Memory retrieved
+        self._emit_progress("MEMORY_RETRIEVED", {
+            "status": "Retrieved",
+            "count": len(relevant_contexts),
+            "contexts": [(timestamp, similarity) for _, timestamp, _, _, _, _, similarity in relevant_contexts]
+        })
+
+        for idx, (ctx_id, timestamp, desc, files_json, apps_json, screen_text, similarity) in enumerate(relevant_contexts, 1):
+            # Indicate if this is a recent context (always included)
+            marker = "📌 RECENT" if similarity == 1.0 else f"🎯 {similarity:.3f}"
+            print(f"  {idx}. [{marker}] {timestamp}")
+
+            context_parts.append(f"[Context {idx} - {timestamp} - Relevance: {marker}]\n{desc}")
+
+            if screen_text:
+                context_parts.append(f"Screen Text:\n{screen_text[:500]}")
+
+            if files_json:
+                try:
+                    files = json.loads(files_json)
+                    if files:
+                        # Add to all_files set
+                        all_files.update(files)
+                        # Show files in context
+                        file_list = '\n'.join([f"  - {f}" for f in files[:5]])
+                        context_parts.append(f"Active Files:\n{file_list}")
+                except Exception as e:
+                    print(f"Error parsing files JSON: {e}")
+
+        context_str = "\n\n---\n\n".join(context_parts)
+
+        # Add summary of all files
+        if all_files:
+            files_summary = "\n\nAll Files Accessed During Retrieved Contexts:\n" + "\n".join([f"  - {f}" for f in list(all_files)[:30]])
+            context_str += files_summary
+
+        # Define Claude-compatible tools
+        claude_tools = self._get_claude_tools()
+
+        # Build the system prompt with tool descriptions
+        system_prompt = f"""You are a helpful AI assistant with access to the user's screen activity context and file system tools.
+
+Based on the following context captured from screen activity (retrieved using semantic search):
+
+{context_str}
+
+---
+
+IMPORTANT CONTEXT RETRIEVAL INFO:
+- Contexts marked "📌 RECENT" are the {self.always_recent} most recent captures (always included)
+- Contexts with "🎯 [score]" were retrieved based on semantic similarity to your question
+- Higher similarity scores (closer to 1.0) indicate more relevance
+
+You have access to the following tools:
+
+FILE SYSTEM TOOLS:
+- read_file_as_text: Read text-based files (code, documents, PDFs, Word docs, Excel, etc.) and get extracted text
+- read_file_with_vision: Use AI vision to analyze any file including images, PDFs, and complex documents
+- list_directory: List directory contents
+- get_file_info: Get file metadata
+- search_files: Search for SPECIFIC files by name/pattern (ONLY when you have a concrete file name from context)
+- get_recent_files: Get recently modified files from watched directories
+
+WEB SEARCH TOOL:
+- search_web: Search the web for current information, facts, news, or real-time data
+
+IMPORTANT GUIDELINES:
+
+1. **SMART FILE HANDLING STRATEGY:**
+   - When you see file paths in the context, use those exact paths directly
+   - Don't search when you already have the path
+   - When user asks about a file you don't have the path for, ASK THE USER for the path
+   - Only use search_files when you saw the exact file name in a recent context
+
+2. For Word documents (.docx), PDFs, and other complex documents:
+   - Use read_file_as_text to get extracted text content
+   - Use read_file_with_vision for comprehensive AI analysis
+
+3. Always read relevant files first to gather information before answering
+4. Use search_web when you need current information beyond the stored contexts
+5. Provide detailed, well-structured answers
+6. When in doubt, ASK THE USER - don't waste time searching randomly!"""
+
+        try:
+            # Start conversation with Claude
+            print(f"\n{'─'*60}")
+            print("💬 Step 3: Processing with Claude 4.5 Sonnet...")
+            print(f"{'─'*60}")
+
+            # Emit progress: AI processing
+            self._emit_progress("AI_PROCESSING", {
+                "status": "Processing"
+            })
+
+            # Claude conversation loop
+            messages = [{"role": "user", "content": question}]
+            max_iterations = 10
+            iteration = 0
+            tool_execution_count = 0
+
+            for iteration in range(max_iterations):
+                # Send message to Claude
+                response = self.claude_client.messages.create(
+                    model="claude-sonnet-4-5@20250929",
+                    max_tokens=4096,
+                    system=system_prompt,
+                    tools=claude_tools,
+                    messages=messages
+                )
+
+                # Check if Claude wants to use tools
+                if response.stop_reason == "tool_use":
+                    # Execute tools
+                    if tool_execution_count == 0:
+                        print(f"\n{'─'*60}")
+                        print("🔧 Step 4: Executing tools to gather information...")
+                        print(f"{'─'*60}")
+
+                    # Add assistant response to messages
+                    messages.append({
+                        "role": "assistant",
+                        "content": response.content
+                    })
+
+                    # Execute each tool call
+                    tool_results = []
+                    for block in response.content:
+                        if block.type == "tool_use":
+                            tool_name = block.name
+                            tool_args = block.input
+                            tool_execution_count += 1
+
+                            # Emit progress: Tool execution started
+                            self._emit_progress("TOOL_EXECUTE", {
+                                "tool_name": tool_name,
+                                "args": tool_args,
+                                "status": "executing"
+                            })
+
+                            # Visual indicator based on tool type
+                            if tool_name == "read_file_as_text" or tool_name == "read_file_with_vision":
+                                file_path = tool_args.get("file_path", "")
+                                file_name = Path(file_path).name if file_path else "unknown"
+                                print(f"\n  📄 [{tool_execution_count}] Reading file: {file_name}")
+                                print(f"      Path: {file_path}")
+                            elif tool_name == "search_web":
+                                query = tool_args.get("query", "")
+                                print(f"\n  🌐 [{tool_execution_count}] Searching web: '{query}'")
+                                self._emit_progress("GROUNDING_SEARCH", {
+                                    "query": query,
+                                    "status": "searching"
+                                })
+                            elif tool_name == "list_directory":
+                                dir_path = tool_args.get("directory_path", "")
+                                print(f"\n  📁 [{tool_execution_count}] Listing directory: {dir_path}")
+                            elif tool_name == "search_files":
+                                pattern = tool_args.get("pattern", "")
+                                print(f"\n  🔎 [{tool_execution_count}] Searching files: {pattern}")
+                            elif tool_name == "get_recent_files":
+                                hours = tool_args.get("hours", 1)
+                                print(f"\n  🕐 [{tool_execution_count}] Getting files from last {hours} hours")
+                            elif tool_name == "get_file_info":
+                                file_path = tool_args.get("file_path", "")
+                                file_name = Path(file_path).name if file_path else "unknown"
+                                print(f"\n  ℹ️  [{tool_execution_count}] Getting info for: {file_name}")
+                            else:
+                                print(f"\n  🔧 [{tool_execution_count}] Executing: {tool_name}")
+
+                            # Execute the tool
+                            result = self._execute_tool(tool_name, tool_args)
+
+                            # Show completion indicator
+                            is_error = (
+                                result.startswith("Error reading file") or
+                                result.startswith("Error analyzing file") or
+                                result.startswith("Error getting file info") or
+                                result.startswith("Error searching files") or
+                                result.startswith("Error listing directory") or
+                                result.startswith("Error getting recent files") or
+                                result.startswith("Access denied") or
+                                result.startswith("File not found") or
+                                result.startswith("Directory not found") or
+                                "not installed" in result.lower() or
+                                "not supported" in result.lower()
+                            )
+                            if is_error:
+                                print(f"      ❌ Failed")
+                            else:
+                                print(f"      ✅ Complete")
+
+                            # Emit progress: Tool execution complete
+                            self._emit_progress("TOOL_COMPLETE", {
+                                "tool_name": tool_name,
+                                "status": "error" if is_error else "success",
+                                "result_preview": result[:100] if result else ""
+                            })
+
+                            # Add tool result
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": result
+                            })
+
+                    # Add tool results to messages
+                    if tool_results:
+                        print(f"\n  🔄 Sending results back to AI for processing...")
+                        messages.append({
+                            "role": "user",
+                            "content": tool_results
+                        })
+                else:
+                    # No more tool calls, extract final answer
+                    break
+
+            if tool_execution_count > 0:
+                print(f"\n{'─'*60}")
+                print(f"✅ Completed {tool_execution_count} tool execution(s)")
+                print(f"{'─'*60}")
+
+            # Extract final text response
+            print(f"\n{'─'*60}")
+            print("✨ Step 5: Generating final answer...")
+            print(f"{'─'*60}\n")
+
+            final_text = ""
+            for block in response.content:
+                if hasattr(block, 'text'):
+                    final_text += block.text
+
+            if final_text:
+                print(f"{'='*60}")
+                print("✅ ANSWER READY")
+                print(f"{'='*60}\n")
+
+                # Emit progress: Answer ready
+                self._emit_progress("ANSWER_READY", {
+                    "status": "complete"
+                })
+
+            return final_text if final_text else "No response generated. The model may need more context or there may be an issue with the query."
+
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"Full error traceback:\n{error_details}")
+            return f"Error querying with Claude: {str(e)}\n\nPlease check that:\n1. Your Google Cloud project is configured correctly\n2. You have the GOOGLE_CLOUD_PROJECT environment variable set\n3. You have authenticated with Google Cloud (gcloud auth application-default login)\n4. Claude is enabled in your Vertex AI project"
+
+    def _get_claude_tools(self):
+        """Get tool definitions in Claude's format"""
+        return [
+            {
+                "name": "read_file_as_text",
+                "description": "Read and extract text content from various file types including code files, PDFs, Word documents, Excel spreadsheets, PowerPoint presentations, and plain text files. Returns the extracted text content.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file to read"
+                        }
+                    },
+                    "required": ["file_path"]
+                }
+            },
+            {
+                "name": "read_file_with_vision",
+                "description": "Use AI vision to analyze any file including images, PDFs, diagrams, charts, screenshots, or complex documents. Provides comprehensive visual analysis and content extraction.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file to analyze"
+                        },
+                        "prompt": {
+                            "type": "string",
+                            "description": "Optional analysis prompt to guide the vision model (e.g., 'Describe this chart', 'Extract the table data')"
+                        }
+                    },
+                    "required": ["file_path"]
+                }
+            },
+            {
+                "name": "list_directory",
+                "description": "List all files and subdirectories in a directory with their metadata (size, modification time, type).",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "directory_path": {
+                            "type": "string",
+                            "description": "Absolute path to the directory to list"
+                        }
+                    },
+                    "required": ["directory_path"]
+                }
+            },
+            {
+                "name": "get_file_info",
+                "description": "Get detailed metadata about a specific file (size, creation time, modification time, file type).",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file"
+                        }
+                    },
+                    "required": ["file_path"]
+                }
+            },
+            {
+                "name": "search_files",
+                "description": "Search for files by name pattern in watched directories, home directory, or desktop. WARNING: This is slow. Only use when you have a specific file name from the captured context. If you don't know the file name or location, ask the user instead.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "File name or pattern to search for (e.g., 'report.pdf', '*.txt')"
+                        },
+                        "search_scope": {
+                            "type": "string",
+                            "description": "Where to search: 'watched' (default, searches watched directories only), 'home' (searches entire home directory), or 'desktop' (searches desktop only)",
+                            "enum": ["watched", "home", "desktop"]
+                        }
+                    },
+                    "required": ["pattern"]
+                }
+            },
+            {
+                "name": "get_recent_files",
+                "description": "Get list of recently modified files from watched directories, sorted by modification time.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "hours": {
+                            "type": "integer",
+                            "description": "Number of hours to look back (default: 1)"
+                        }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "search_web",
+                "description": "Search the web using Google for current information, facts, news, real-time data, or to verify information. Use this when you need up-to-date information not available in the captured contexts.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        ]
+
     def list_recent(self, limit=10):
         """List recent captures"""
         conn = sqlite3.connect(self.db_path)

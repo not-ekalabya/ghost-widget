@@ -49,7 +49,7 @@ USE_PYQT6 = True
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
-    QGraphicsDropShadowEffect, QTabWidget
+    QGraphicsDropShadowEffect, QTabWidget, QComboBox
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
 from PyQt6.QtGui import QFont, QAction, QColor
@@ -253,7 +253,8 @@ class CompanionRunner(threading.Thread):
             "watch_dirs": self.config.get("watch_dirs", []),
             "always_recent": self.config.get("always_recent", 3),
             "user_id": user_id,
-            "progress_callback": progress_callback
+            "progress_callback": progress_callback,
+            "qa_model": self.config.get("qa_model", "gemini")
         }
 
         return BackgroundCompanion(**kwargs)
@@ -656,6 +657,32 @@ class OverlayWindow(QWidget):
         interval_h.addStretch()
         settings_layout.addLayout(interval_h)
 
+        # QA Model selection with modern styling
+        qa_model_h = QHBoxLayout()
+        qa_model_h.setSpacing(16)
+        qa_model_label = QLabel("QA Model")
+        qa_model_label.setObjectName("fieldLabel")
+        qa_model_label.setToolTip("Model used for answering questions (screenshots always use Gemini)")
+        qa_model_h.addWidget(qa_model_label)
+
+        self.qa_model_combo = QComboBox()
+        self.qa_model_combo.setObjectName("modernComboBox")
+        self.qa_model_combo.addItem("Gemini (Default)", "gemini")
+        self.qa_model_combo.addItem("Claude 4.5 Sonnet", "claude")
+        self.qa_model_combo.setToolTip("Gemini: Free/low-cost, fast\nClaude: Superior reasoning, requires Vertex AI setup")
+
+        # Set current value from config
+        current_qa_model = self.config.get("qa_model", "gemini")
+        index = self.qa_model_combo.findData(current_qa_model)
+        if index >= 0:
+            self.qa_model_combo.setCurrentIndex(index)
+
+        self.qa_model_combo.setFixedHeight(38)
+        self.qa_model_combo.setFixedWidth(200)
+        qa_model_h.addWidget(self.qa_model_combo)
+        qa_model_h.addStretch()
+        settings_layout.addLayout(qa_model_h)
+
         # Watch directories with modern list
         watch_header = QHBoxLayout()
         watch_header.setSpacing(0)
@@ -1005,7 +1032,61 @@ class OverlayWindow(QWidget):
             #modernSpinBox::up-button:hover, #modernSpinBox::down-button:hover {
                 background: rgba(255, 255, 255, 0.12);
             }
-            
+
+            /* Combo box */
+            #modernComboBox {
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 10px;
+                color: #FAFAFA;
+                padding: 0 12px;
+                font-size: 13px;
+                font-weight: 500;
+            }
+
+            #modernComboBox:hover {
+                background: rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+            }
+
+            #modernComboBox::drop-down {
+                border: none;
+                background: transparent;
+                width: 30px;
+            }
+
+            #modernComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 5px solid #A1A1AA;
+                margin-right: 8px;
+            }
+
+            #modernComboBox QAbstractItemView {
+                background: #27272A;
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 8px;
+                color: #FAFAFA;
+                selection-background-color: rgba(59, 130, 246, 0.25);
+                selection-color: #FAFAFA;
+                padding: 4px;
+            }
+
+            #modernComboBox QAbstractItemView::item {
+                padding: 8px 12px;
+                border-radius: 6px;
+                min-height: 30px;
+            }
+
+            #modernComboBox QAbstractItemView::item:hover {
+                background: rgba(255, 255, 255, 0.08);
+            }
+
+            #modernComboBox QAbstractItemView::item:selected {
+                background: rgba(59, 130, 246, 0.25);
+            }
+
             /* List widget */
             #modernList {
                 background: rgba(0, 0, 0, 0.25);
@@ -1116,7 +1197,8 @@ class OverlayWindow(QWidget):
             "user_id": self.user_id_edit.text().strip() or "default_user",
             "interval": int(self.interval_spin.value()),
             "watch_dirs": watch_dirs,
-            "always_recent": self.config.get("always_recent", 3)
+            "always_recent": self.config.get("always_recent", 3),
+            "qa_model": self.qa_model_combo.currentData()
         }
 
     def on_start_stop(self):
@@ -1520,7 +1602,8 @@ def load_config():
         "user_id": "default_user",
         "interval": 60,
         "watch_dirs": [],
-        "always_recent": 3
+        "always_recent": 3,
+        "qa_model": "gemini"
     }
     try:
         if CONFIG_PATH.exists():
