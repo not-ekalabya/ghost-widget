@@ -466,6 +466,7 @@ class OverlayWindow(QWidget):
     def _init_github_auth(self):
         """Initialize GitHub Auth"""
         if not GITHUB_AVAILABLE:
+            self._pending_github_restore = None
             return
 
         try:
@@ -474,8 +475,23 @@ class OverlayWindow(QWidget):
                 user_info = self.github_auth.get_user_info()
                 if user_info:
                     print(f"✅ GitHub: Auto-restored session for: {user_info['login']}")
+                    # Store for UI update after init_ui() is called
+                    self._pending_github_restore = user_info
+                else:
+                    self._pending_github_restore = None
+            else:
+                self._pending_github_restore = None
         except Exception as e:
             print(f"Failed to initialize GitHub Auth: {e}")
+            self._pending_github_restore = None
+
+    def update_github_ui_state(self, username):
+        """Update GitHub UI to show authenticated state"""
+        if hasattr(self, 'github_signin_btn') and hasattr(self, 'github_user_lbl'):
+            self.github_signin_btn.setEnabled(False)
+            self.github_signin_btn.setText("✓ Connected to GitHub")
+            self.github_user_lbl.setText(f"Connected as: {username}")
+            self.github_user_lbl.setStyleSheet("color: #10B981; font-size: 11px; margin-top: 8px;")
 
     def init_ui(self):
         self.setWindowTitle("Ghost Widget")
@@ -937,6 +953,13 @@ class OverlayWindow(QWidget):
             # Use QTimer.singleShot to defer the UI update until after the event loop starts
             QTimer.singleShot(100, lambda: self.signals.auth_update.emit(self._pending_auth_restore))
             QTimer.singleShot(100, lambda: self.signals.log.emit(f"<span style='color: #10B981;'>✅ Restored session: {self._pending_auth_restore.get('email', 'Anonymous')}</span>"))
+
+        # Restore GitHub authentication state if available
+        if hasattr(self, '_pending_github_restore') and self._pending_github_restore:
+            username = self._pending_github_restore.get('login', 'Unknown')
+            # Use QTimer.singleShot to defer the UI update until after the event loop starts
+            QTimer.singleShot(100, lambda u=username: self.update_github_ui_state(u))
+            QTimer.singleShot(100, lambda u=username: self.signals.log.emit(f"<span style='color: #10B981;'>✅ GitHub: Restored session for {u}</span>"))
 
     def apply_modern_style(self):
         self.setStyleSheet("""

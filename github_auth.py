@@ -791,6 +791,149 @@ class GitHubAuth:
             print(f"Error getting releases from {repo_name}: {e}")
             return None
 
+    def get_repository_contents(self, repo_name, path="", ref=None):
+        """
+        Get contents of a directory or file from a repository
+
+        Args:
+            repo_name: Repository name in format "owner/repo"
+            path: Path within the repository (empty string for root)
+            ref: Branch/tag/commit to read from (default: default branch)
+
+        Returns:
+            list: List of file/directory information or None
+        """
+        if not self.is_authenticated():
+            return None
+
+        try:
+            repo = self.get_repository(repo_name)
+            if not repo:
+                return None
+
+            contents = repo.get_contents(path, ref=ref) if ref else repo.get_contents(path)
+
+            # Handle single file
+            if not isinstance(contents, list):
+                contents = [contents]
+
+            result = []
+            for content in contents:
+                item = {
+                    'name': content.name,
+                    'path': content.path,
+                    'type': content.type,  # 'file' or 'dir'
+                    'size': content.size,
+                    'sha': content.sha,
+                    'url': content.html_url,
+                    'download_url': content.download_url if content.type == 'file' else None
+                }
+                result.append(item)
+
+            return result
+        except GithubException as e:
+            if e.status == 404:
+                return {'error': 'Path not found'}
+            print(f"Error getting contents from {repo_name}:{path}: {e}")
+            return None
+        except Exception as e:
+            print(f"Error getting contents from {repo_name}:{path}: {e}")
+            return None
+
+    def get_file_content(self, repo_name, file_path, ref=None):
+        """
+        Get the content of a specific file from a repository
+
+        Args:
+            repo_name: Repository name in format "owner/repo"
+            file_path: Path to the file within the repository
+            ref: Branch/tag/commit to read from (default: default branch)
+
+        Returns:
+            dict: File content and metadata or None
+        """
+        if not self.is_authenticated():
+            return None
+
+        try:
+            repo = self.get_repository(repo_name)
+            if not repo:
+                return None
+
+            file_content = repo.get_contents(file_path, ref=ref) if ref else repo.get_contents(file_path)
+
+            # Decode content
+            try:
+                content = file_content.decoded_content.decode('utf-8')
+            except UnicodeDecodeError:
+                # Binary file
+                content = None
+                content_base64 = file_content.content
+
+            return {
+                'name': file_content.name,
+                'path': file_content.path,
+                'size': file_content.size,
+                'content': content,
+                'encoding': file_content.encoding,
+                'sha': file_content.sha,
+                'url': file_content.html_url,
+                'download_url': file_content.download_url,
+                'is_binary': content is None
+            }
+        except GithubException as e:
+            if e.status == 404:
+                return {'error': 'File not found'}
+            print(f"Error getting file content from {repo_name}:{file_path}: {e}")
+            return None
+        except Exception as e:
+            print(f"Error getting file content from {repo_name}:{file_path}: {e}")
+            return None
+
+    def get_repository_tree(self, repo_name, ref=None, recursive=True):
+        """
+        Get the complete file tree of a repository
+
+        Args:
+            repo_name: Repository name in format "owner/repo"
+            ref: Branch/tag/commit to read from (default: default branch)
+            recursive: Get full tree recursively (default: True)
+
+        Returns:
+            list: List of all files and directories with paths
+        """
+        if not self.is_authenticated():
+            return None
+
+        try:
+            repo = self.get_repository(repo_name)
+            if not repo:
+                return None
+
+            # Get the branch
+            if ref:
+                branch = repo.get_branch(ref)
+            else:
+                branch = repo.get_branch(repo.default_branch)
+
+            # Get the tree
+            tree = repo.get_git_tree(branch.commit.sha, recursive=recursive)
+
+            result = []
+            for item in tree.tree:
+                result.append({
+                    'path': item.path,
+                    'type': item.type,  # 'blob' (file) or 'tree' (directory)
+                    'size': item.size,
+                    'sha': item.sha,
+                    'url': item.url
+                })
+
+            return result
+        except Exception as e:
+            print(f"Error getting repository tree from {repo_name}: {e}")
+            return None
+
 
 # Singleton instance
 _github_auth_instance = None

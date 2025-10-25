@@ -507,6 +507,72 @@ class BackgroundCompanion:
                             "required": ["repo_name"]
                         }
                     },
+                    {
+                        "name": "github_list_directory",
+                        "description": "List contents of a directory in a GitHub repository. Returns files and subdirectories with their metadata. Use empty string for root directory.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo'"
+                                },
+                                "path": {
+                                    "type": "string",
+                                    "description": "Path within the repository (empty string for root directory, e.g., 'src' or 'docs/api')"
+                                },
+                                "ref": {
+                                    "type": "string",
+                                    "description": "Optional branch/tag/commit to read from (default: default branch)"
+                                }
+                            },
+                            "required": ["repo_name"]
+                        }
+                    },
+                    {
+                        "name": "github_read_file",
+                        "description": "Read the complete content of a file from a GitHub repository. Returns the full file content as text.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo'"
+                                },
+                                "file_path": {
+                                    "type": "string",
+                                    "description": "Path to the file within the repository (e.g., 'README.md', 'src/main.py')"
+                                },
+                                "ref": {
+                                    "type": "string",
+                                    "description": "Optional branch/tag/commit to read from (default: default branch)"
+                                }
+                            },
+                            "required": ["repo_name", "file_path"]
+                        }
+                    },
+                    {
+                        "name": "github_get_tree",
+                        "description": "Get the complete file tree structure of a GitHub repository. Returns all files and directories recursively. Useful for understanding the full project structure.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "repo_name": {
+                                    "type": "string",
+                                    "description": "Repository name in format 'owner/repo'"
+                                },
+                                "ref": {
+                                    "type": "string",
+                                    "description": "Optional branch/tag/commit to read from (default: default branch)"
+                                },
+                                "recursive": {
+                                    "type": "boolean",
+                                    "description": "Get full tree recursively (default: true)"
+                                }
+                            },
+                            "required": ["repo_name"]
+                        }
+                    },
                 ]
             }
         ]
@@ -1938,6 +2004,66 @@ Tags: {tags_str}
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)})
 
+    def github_list_directory(self, repo_name: str, path: str = "", ref: str = None) -> str:
+        """List contents of a directory in a GitHub repository"""
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({"success": False, "error": "GitHub integration not available"})
+
+            github_auth = get_github_auth()
+            if not github_auth.is_authenticated():
+                return json.dumps({"success": False, "error": "Not authenticated with GitHub"})
+
+            contents = github_auth.get_repository_contents(repo_name, path, ref)
+            if contents is None:
+                return json.dumps({"success": False, "error": f"Could not list directory {path} in {repo_name}"})
+
+            if isinstance(contents, dict) and 'error' in contents:
+                return json.dumps({"success": False, "error": contents['error']})
+
+            return json.dumps({"success": True, "repo_name": repo_name, "path": path, "item_count": len(contents), "contents": contents}, indent=2)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
+    def github_read_file(self, repo_name: str, file_path: str, ref: str = None) -> str:
+        """Read the content of a file from a GitHub repository"""
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({"success": False, "error": "GitHub integration not available"})
+
+            github_auth = get_github_auth()
+            if not github_auth.is_authenticated():
+                return json.dumps({"success": False, "error": "Not authenticated with GitHub"})
+
+            file_content = github_auth.get_file_content(repo_name, file_path, ref)
+            if file_content is None:
+                return json.dumps({"success": False, "error": f"Could not read file {file_path} from {repo_name}"})
+
+            if isinstance(file_content, dict) and 'error' in file_content:
+                return json.dumps({"success": False, "error": file_content['error']})
+
+            return json.dumps({"success": True, "repo_name": repo_name, "file": file_content}, indent=2)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
+    def github_get_tree(self, repo_name: str, ref: str = None, recursive: bool = True) -> str:
+        """Get the complete file tree of a GitHub repository"""
+        try:
+            if not GITHUB_AVAILABLE:
+                return json.dumps({"success": False, "error": "GitHub integration not available"})
+
+            github_auth = get_github_auth()
+            if not github_auth.is_authenticated():
+                return json.dumps({"success": False, "error": "Not authenticated with GitHub"})
+
+            tree = github_auth.get_repository_tree(repo_name, ref, recursive)
+            if tree is None:
+                return json.dumps({"success": False, "error": f"Could not get tree from {repo_name}"})
+
+            return json.dumps({"success": True, "repo_name": repo_name, "file_count": len(tree), "tree": tree}, indent=2)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)})
+
     def search_web(self, query: str) -> str:
         """
         Search the web using Google's grounding feature via a separate Gemini instance
@@ -2077,6 +2203,21 @@ Be detailed and informative."""
             "github_get_releases": lambda: self.github_get_releases(
                 repo_name=args.get("repo_name", ""),
                 max_results=int(args.get("max_results", 10))
+            ),
+            "github_list_directory": lambda: self.github_list_directory(
+                repo_name=args.get("repo_name", ""),
+                path=args.get("path", ""),
+                ref=args.get("ref", None)
+            ),
+            "github_read_file": lambda: self.github_read_file(
+                repo_name=args.get("repo_name", ""),
+                file_path=args.get("file_path", ""),
+                ref=args.get("ref", None)
+            ),
+            "github_get_tree": lambda: self.github_get_tree(
+                repo_name=args.get("repo_name", ""),
+                ref=args.get("ref", None),
+                recursive=args.get("recursive", True)
             )
         }
 
@@ -3317,6 +3458,72 @@ If the user asks about:
                         "max_results": {
                             "type": "integer",
                             "description": "Maximum number of releases to return (default: 10)"
+                        }
+                    },
+                    "required": ["repo_name"]
+                }
+            },
+            {
+                "name": "github_list_directory",
+                "description": "List contents of a directory in a GitHub repository. Returns files and subdirectories with their metadata. Use empty string for root directory.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo'"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Path within the repository (empty string for root directory, e.g., 'src' or 'docs/api')"
+                        },
+                        "ref": {
+                            "type": "string",
+                            "description": "Optional branch/tag/commit to read from (default: default branch)"
+                        }
+                    },
+                    "required": ["repo_name"]
+                }
+            },
+            {
+                "name": "github_read_file",
+                "description": "Read the complete content of a file from a GitHub repository. Returns the full file content as text.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo'"
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "Path to the file within the repository (e.g., 'README.md', 'src/main.py')"
+                        },
+                        "ref": {
+                            "type": "string",
+                            "description": "Optional branch/tag/commit to read from (default: default branch)"
+                        }
+                    },
+                    "required": ["repo_name", "file_path"]
+                }
+            },
+            {
+                "name": "github_get_tree",
+                "description": "Get the complete file tree structure of a GitHub repository. Returns all files and directories recursively. Useful for understanding the full project structure.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_name": {
+                            "type": "string",
+                            "description": "Repository name in format 'owner/repo'"
+                        },
+                        "ref": {
+                            "type": "string",
+                            "description": "Optional branch/tag/commit to read from (default: default branch)"
+                        },
+                        "recursive": {
+                            "type": "boolean",
+                            "description": "Get full tree recursively (default: true)"
                         }
                     },
                     "required": ["repo_name"]
