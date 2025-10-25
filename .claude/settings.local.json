@@ -10,7 +10,8 @@
       "WebFetch(domain:docs.mem0.ai)",
       "WebFetch(domain:deepwiki.com)",
       "Bash(python -m py_compile:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(sed:*)"
     ],
     "deny": [],
     "ask": []

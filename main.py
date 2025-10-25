@@ -495,8 +495,8 @@ class OverlayWindow(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("Ghost Widget")
-        # Visual sizing - compact for tabs
-        self.setFixedSize(440, 580)
+        # Visual sizing - taller to maximize chat area
+        self.setFixedSize(440, 700)
 
         # Main container widget with rounded corners
         container = QWidget()
@@ -559,77 +559,54 @@ class OverlayWindow(QWidget):
         # === CHAT TAB ===
         chat_tab = QWidget()
         chat_layout = QVBoxLayout(chat_tab)
-        chat_layout.setContentsMargins(0, 16, 0, 0)
-        chat_layout.setSpacing(16)
+        chat_layout.setContentsMargins(0, 8, 0, 0)
+        chat_layout.setSpacing(8)
 
-        # Buttons: Start/Stop with modern design
+        # Buttons: Start/Stop with compact design
         btn_h = QHBoxLayout()
-        btn_h.setSpacing(10)
+        btn_h.setSpacing(8)
 
         self.start_btn = QPushButton("Start Recording")
         self.start_btn.setObjectName("primaryButton")
         self.start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.start_btn.clicked.connect(self.on_start_stop)
-        self.start_btn.setFixedHeight(46)
+        self.start_btn.setFixedHeight(32)
         btn_h.addWidget(self.start_btn, 2)
 
         self.hide_btn = QPushButton("Hide")
         self.hide_btn.setObjectName("secondaryButton")
         self.hide_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.hide_btn.clicked.connect(self.toggle_visibility)
-        self.hide_btn.setFixedHeight(46)
+        self.hide_btn.setFixedHeight(32)
         btn_h.addWidget(self.hide_btn, 1)
         chat_layout.addLayout(btn_h)
 
-        # Ask question section with modern input
-        ask_section = QVBoxLayout()
-        ask_section.setSpacing(8)
+        # Response display - maximize this area, no border
+        self.response_area = MarkdownTextEdit()
+        self.response_area.setObjectName("modernTextArea")
+        self.response_area.setReadOnly(True)
+        chat_layout.addWidget(self.response_area, 1)  # Stretch factor 1 to maximize
 
-        ask_lbl = QLabel("ASK QUESTION")
-        ask_lbl.setObjectName("sectionLabel")
-        ask_section.addWidget(ask_lbl)
-
+        # Ask question section at bottom - compact
         ask_input_h = QHBoxLayout()
-        ask_input_h.setSpacing(10)
+        ask_input_h.setSpacing(8)
 
         self.ask_edit = QLineEdit()
         self.ask_edit.setObjectName("modernInput")
-        self.ask_edit.setPlaceholderText("What would you like to know?")
+        self.ask_edit.setPlaceholderText("Ask Anything")
         self.ask_edit.returnPressed.connect(self.on_ask)
-        self.ask_edit.setFixedHeight(42)
+        self.ask_edit.setFixedHeight(36)
         ask_input_h.addWidget(self.ask_edit)
 
         self.ask_btn = QPushButton("Send")
         self.ask_btn.setObjectName("accentButton")
         self.ask_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.ask_btn.clicked.connect(self.on_ask)
-        self.ask_btn.setFixedHeight(42)
-        self.ask_btn.setFixedWidth(85)
+        self.ask_btn.setFixedHeight(36)
+        self.ask_btn.setFixedWidth(70)
         ask_input_h.addWidget(self.ask_btn)
 
-        ask_section.addLayout(ask_input_h)
-        chat_layout.addLayout(ask_section)
-
-        # Response display with header
-        resp_header = QHBoxLayout()
-        resp_header.setSpacing(0)
-        resp_lbl = QLabel("RESPONSE")
-        resp_lbl.setObjectName("sectionLabel")
-        resp_header.addWidget(resp_lbl)
-        resp_header.addStretch()
-
-        self.clear_resp_btn = QPushButton("Clear")
-        self.clear_resp_btn.setObjectName("textButton")
-        self.clear_resp_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.clear_resp_btn.clicked.connect(self.clear_response_and_progress)
-        self.clear_resp_btn.setFixedHeight(24)
-        resp_header.addWidget(self.clear_resp_btn)
-        chat_layout.addLayout(resp_header)
-
-        self.response_area = MarkdownTextEdit()
-        self.response_area.setObjectName("modernTextArea")
-        self.response_area.setReadOnly(True)
-        chat_layout.addWidget(self.response_area)
+        chat_layout.addLayout(ask_input_h)
 
         # Add chat tab
         self.tabs.addTab(chat_tab, "Chat")
@@ -645,28 +622,7 @@ class OverlayWindow(QWidget):
         cfg_lbl.setObjectName("sectionLabel")
         settings_layout.addWidget(cfg_lbl)
 
-        # API Key with save button (Gemini - shown but not used since hardcoded)
-        cfg_form_h = QHBoxLayout()
-        cfg_form_h.setSpacing(10)
-
-        self.api_key_edit = QLineEdit(self.config.get("api_key", ""))
-        self.api_key_edit.setObjectName("modernInput")
-        self.api_key_edit.setPlaceholderText("Gemini API Key (hardcoded)")
-        self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key_edit.setFixedHeight(38)
-        self.api_key_edit.setEnabled(False)  # Disabled since hardcoded
-        cfg_form_h.addWidget(self.api_key_edit)
-
-        self.save_cfg_btn = QPushButton("Save")
-        self.save_cfg_btn.setObjectName("accentButton")
-        self.save_cfg_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.save_cfg_btn.clicked.connect(self.save_config)
-        self.save_cfg_btn.setFixedHeight(38)
-        self.save_cfg_btn.setFixedWidth(75)
-        cfg_form_h.addWidget(self.save_cfg_btn)
-        settings_layout.addLayout(cfg_form_h)
-
-        # User ID (for mem0 per-user memory separation)
+        # User ID (for mem0 per-user memory separation) - displayed as plain text
         user_id_h = QHBoxLayout()
         user_id_h.setSpacing(10)
 
@@ -674,11 +630,11 @@ class OverlayWindow(QWidget):
         user_id_label.setObjectName("fieldLabel")
         user_id_h.addWidget(user_id_label)
 
-        self.user_id_edit = QLineEdit(self.config.get("user_id", "default_user"))
-        self.user_id_edit.setObjectName("modernInput")
-        self.user_id_edit.setPlaceholderText("User ID for memory separation")
-        self.user_id_edit.setFixedHeight(38)
-        user_id_h.addWidget(self.user_id_edit)
+        self.user_id_display = QLabel(self.config.get("user_id", "default_user"))
+        self.user_id_display.setObjectName("fieldValue")
+        self.user_id_display.setStyleSheet("color: #D4D4D8; font-size: 12px; font-weight: 500;")
+        user_id_h.addWidget(self.user_id_display)
+        user_id_h.addStretch()
         settings_layout.addLayout(user_id_h)
 
         # Interval spinner with modern styling
@@ -691,7 +647,7 @@ class OverlayWindow(QWidget):
         self.interval_spin = QSpinBox()
         self.interval_spin.setObjectName("modernSpinBox")
         self.interval_spin.setRange(1, 86400)
-        self.interval_spin.setValue(int(self.config.get("interval", 60)))
+        self.interval_spin.setValue(int(self.config.get("interval", 5)))
         self.interval_spin.setSuffix(" sec")
         self.interval_spin.setFixedHeight(38)
         self.interval_spin.setFixedWidth(125)
@@ -759,37 +715,28 @@ class OverlayWindow(QWidget):
         watch_btn_h.addWidget(remove_dir_btn)
         settings_layout.addLayout(watch_btn_h)
 
-        # Log area
-        log_lbl = QLabel("ACTIVITY LOG")
-        log_lbl.setObjectName("sectionLabel")
-        settings_layout.addWidget(log_lbl)
-
-        self.log_area = QTextEdit()
-        self.log_area.setObjectName("modernTextArea")
-        self.log_area.setReadOnly(True)
-        settings_layout.addWidget(self.log_area)
         settings_layout.addStretch()
 
         # Add settings tab
         self.tabs.addTab(settings_tab, "Settings")
 
-        # === AUTH TAB ===
-        auth_tab = QWidget()
-        auth_layout = QVBoxLayout(auth_tab)
-        auth_layout.setContentsMargins(0, 16, 0, 0)
-        auth_layout.setSpacing(16)
+        # === ACCOUNT TAB ===
+        account_tab = QWidget()
+        account_layout = QVBoxLayout(account_tab)
+        account_layout.setContentsMargins(0, 16, 0, 0)
+        account_layout.setSpacing(16)
 
         # Auth status indicator
         self.auth_status_lbl = QLabel("Not authenticated")
         self.auth_status_lbl.setObjectName("sectionLabel")
-        auth_layout.addWidget(self.auth_status_lbl)
+        account_layout.addWidget(self.auth_status_lbl)
 
         # Info text
         info_lbl = QLabel("Sign in with your Google account to access personalized features")
         info_lbl.setObjectName("fieldLabel")
         info_lbl.setStyleSheet("color: #A1A1AA; font-size: 11px; margin-top: 10px;")
         info_lbl.setWordWrap(True)
-        auth_layout.addWidget(info_lbl)
+        account_layout.addWidget(info_lbl)
 
         # Google Sign-In button (larger, prominent)
         self.google_signin_btn = QPushButton("🔐 Sign in with Google")
@@ -819,40 +766,28 @@ class OverlayWindow(QWidget):
                 background: #E8EAED;
             }
         """)
-        auth_layout.addWidget(self.google_signin_btn)
+        account_layout.addWidget(self.google_signin_btn)
 
-        # Additional auth buttons
-        auth_extra_layout = QHBoxLayout()
-        auth_extra_layout.setSpacing(10)
-
+        # Sign out button (no anonymous login)
         self.signout_btn = QPushButton("Sign Out")
         self.signout_btn.setObjectName("secondaryButton")
         self.signout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.signout_btn.clicked.connect(self.on_signout)
         self.signout_btn.setFixedHeight(38)
         self.signout_btn.setEnabled(False)
-        auth_extra_layout.addWidget(self.signout_btn)
-
-        self.anonymous_btn = QPushButton("Anonymous Login")
-        self.anonymous_btn.setObjectName("secondaryButton")
-        self.anonymous_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.anonymous_btn.clicked.connect(self.on_anonymous_signin)
-        self.anonymous_btn.setFixedHeight(38)
-        auth_extra_layout.addWidget(self.anonymous_btn)
-
-        auth_layout.addLayout(auth_extra_layout)
+        account_layout.addWidget(self.signout_btn)
 
         # User info display
         user_info_lbl = QLabel("USER INFO")
         user_info_lbl.setObjectName("sectionLabel")
-        auth_layout.addWidget(user_info_lbl)
+        account_layout.addWidget(user_info_lbl)
 
         self.user_info_area = QTextEdit()
         self.user_info_area.setObjectName("modernTextArea")
         self.user_info_area.setReadOnly(True)
         self.user_info_area.setFixedHeight(120)
         self.user_info_area.setPlaceholderText("User information will appear here after authentication...")
-        auth_layout.addWidget(self.user_info_area)
+        account_layout.addWidget(self.user_info_area)
 
         # Firebase status
         if FIREBASE_AVAILABLE:
@@ -866,20 +801,30 @@ class OverlayWindow(QWidget):
         status_lbl.setObjectName("fieldLabel")
         status_lbl.setStyleSheet("color: #71717A; font-size: 10px; margin-top: 10px;")
         status_lbl.setWordWrap(True)
-        auth_layout.addWidget(status_lbl)
+        account_layout.addWidget(status_lbl)
+
+        account_layout.addStretch()
+
+        # Add account tab
+        self.tabs.addTab(account_tab, "Account")
+
+        # === CONNECTED APPS TAB ===
+        apps_tab = QWidget()
+        apps_layout = QVBoxLayout(apps_tab)
+        apps_layout.setContentsMargins(0, 16, 0, 0)
+        apps_layout.setSpacing(16)
 
         # GitHub Authentication Section
         github_header = QLabel("GITHUB INTEGRATION")
         github_header.setObjectName("sectionLabel")
-        github_header.setStyleSheet("margin-top: 20px;")
-        auth_layout.addWidget(github_header)
+        apps_layout.addWidget(github_header)
 
         # GitHub info text
         github_info_lbl = QLabel("Sign in with GitHub to access repository tools and generate content from commits")
         github_info_lbl.setObjectName("fieldLabel")
         github_info_lbl.setStyleSheet("color: #A1A1AA; font-size: 11px; margin-top: 10px;")
         github_info_lbl.setWordWrap(True)
-        auth_layout.addWidget(github_info_lbl)
+        apps_layout.addWidget(github_info_lbl)
 
         # GitHub Sign-In button
         self.github_signin_btn = QPushButton("🔗 Sign in with GitHub")
@@ -909,13 +854,13 @@ class OverlayWindow(QWidget):
                 background: #1B1F23;
             }
         """)
-        auth_layout.addWidget(self.github_signin_btn)
+        apps_layout.addWidget(self.github_signin_btn)
 
         # GitHub user info
         self.github_user_lbl = QLabel("Not connected")
         self.github_user_lbl.setObjectName("fieldLabel")
         self.github_user_lbl.setStyleSheet("color: #71717A; font-size: 11px; margin-top: 8px;")
-        auth_layout.addWidget(self.github_user_lbl)
+        apps_layout.addWidget(self.github_user_lbl)
 
         # GitHub status
         if GITHUB_AVAILABLE:
@@ -927,12 +872,12 @@ class OverlayWindow(QWidget):
         github_status_lbl.setObjectName("fieldLabel")
         github_status_lbl.setStyleSheet("color: #71717A; font-size: 10px; margin-top: 10px;")
         github_status_lbl.setWordWrap(True)
-        auth_layout.addWidget(github_status_lbl)
+        apps_layout.addWidget(github_status_lbl)
 
-        auth_layout.addStretch()
+        apps_layout.addStretch()
 
-        # Add auth tab
-        self.tabs.addTab(auth_tab, "Auth")
+        # Add connected apps tab
+        self.tabs.addTab(apps_tab, "Connected Apps")
 
         container.setLayout(content)
         root.addWidget(container)
@@ -961,17 +906,20 @@ class OverlayWindow(QWidget):
             QTimer.singleShot(100, lambda u=username: self.update_github_ui_state(u))
             QTimer.singleShot(100, lambda u=username: self.signals.log.emit(f"<span style='color: #10B981;'>✅ GitHub: Restored session for {u}</span>"))
 
+        # Update chat enabled state based on authentication
+        self.update_chat_enabled_state()
+
     def apply_modern_style(self):
         self.setStyleSheet("""
-            /* Main container with glassmorphism effect */
+            /* Main container with glassmorphism effect - Translucent gray */
             #container {
                 background: qlineargradient(
                     x1:0, y1:0, x2:0, y2:1,
-                    stop:0 rgba(24, 24, 27, 0.98),
-                    stop:1 rgba(18, 18, 21, 0.98)
+                    stop:0 rgba(24, 24, 27, 0.92),
+                    stop:1 rgba(18, 18, 21, 0.95)
                 );
                 border-radius: 20px;
-                border: 1px solid rgba(255, 255, 255, 0.06);
+                border: 1px solid rgba(255, 255, 255, 0.08);
             }
 
             /* Typography */
@@ -1005,7 +953,7 @@ class OverlayWindow(QWidget):
                 font-weight: 500;
             }
             
-            /* Primary button - gradient with hover effect */
+            /* Primary button - gray gradient */
             #primaryButton {
                 background: qlineargradient(
                     x1:0, y1:0, x2:1, y2:0,
@@ -1014,9 +962,9 @@ class OverlayWindow(QWidget):
                 );
                 color: #FFFFFF;
                 border: none;
-                border-radius: 12px;
+                border-radius: 8px;
                 font-weight: 600;
-                font-size: 14px;
+                font-size: 12px;
                 letter-spacing: -0.2px;
             }
 
@@ -1037,9 +985,9 @@ class OverlayWindow(QWidget):
                 background: rgba(255, 255, 255, 0.06);
                 color: #FAFAFA;
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 12px;
+                border-radius: 8px;
                 font-weight: 500;
-                font-size: 13px;
+                font-size: 11px;
                 letter-spacing: -0.2px;
             }
 
@@ -1051,15 +999,15 @@ class OverlayWindow(QWidget):
             #secondaryButton:pressed {
                 background: rgba(255, 255, 255, 0.04);
             }
-            
+
             /* Accent button */
             #accentButton {
                 background: #10B981;
                 color: #FFFFFF;
                 border: none;
-                border-radius: 10px;
+                border-radius: 8px;
                 font-weight: 600;
-                font-size: 13px;
+                font-size: 12px;
                 letter-spacing: -0.2px;
             }
 
@@ -1091,7 +1039,7 @@ class OverlayWindow(QWidget):
             #modernInput {
                 background: rgba(255, 255, 255, 0.04);
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 10px;
+                border-radius: 8px;
                 color: #FAFAFA;
                 padding: 0 16px;
                 font-size: 13px;
@@ -1109,11 +1057,11 @@ class OverlayWindow(QWidget):
                 font-weight: 400;
             }
 
-            /* Text areas */
+            /* Text areas - transparent background, no border */
             #modernTextArea {
-                background: rgba(0, 0, 0, 0.25);
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 10px;
+                background: transparent;
+                border: none;
+                border-radius: 0px;
                 color: #E4E4E7;
                 padding: 14px;
                 font-size: 12px;
@@ -1125,7 +1073,7 @@ class OverlayWindow(QWidget):
             #modernSpinBox {
                 background: rgba(255, 255, 255, 0.04);
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 10px;
+                border-radius: 8px;
                 color: #FAFAFA;
                 padding: 0 12px;
                 font-size: 13px;
@@ -1147,7 +1095,7 @@ class OverlayWindow(QWidget):
             #modernComboBox {
                 background: rgba(255, 255, 255, 0.04);
                 border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 10px;
+                border-radius: 8px;
                 color: #FAFAFA;
                 padding: 0 12px;
                 font-size: 13px;
@@ -1201,7 +1149,7 @@ class OverlayWindow(QWidget):
             #modernList {
                 background: rgba(0, 0, 0, 0.25);
                 border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 10px;
+                border-radius: 8px;
                 color: #D4D4D8;
                 padding: 6px;
                 font-size: 11px;
@@ -1245,23 +1193,28 @@ class OverlayWindow(QWidget):
                 height: 0px;
             }
 
-            /* Tab Widget */
+            /* Tab Widget - full width tabs */
             QTabWidget::pane {
                 border: none;
                 background: transparent;
                 margin-top: 0px;
             }
 
+            QTabBar {
+                qproperty-expanding: true;
+            }
+
             QTabBar::tab {
                 background: rgba(255, 255, 255, 0.04);
                 color: #71717A;
                 border: none;
-                border-radius: 10px 10px 0 0;
-                padding: 12px 24px;
-                margin-right: 4px;
-                font-size: 12px;
+                border-radius: 0px;
+                padding: 10px 20px;
+                margin: 0px;
+                font-size: 11px;
                 font-weight: 600;
                 letter-spacing: 0.3px;
+                min-width: 0px;
             }
 
             QTabBar::tab:selected {
@@ -1303,8 +1256,8 @@ class OverlayWindow(QWidget):
     def _gather_config_from_ui(self):
         watch_dirs = [self.watch_list.item(i).text() for i in range(self.watch_list.count())]
         return {
-            "api_key": self.api_key_edit.text().strip(),
-            "user_id": self.user_id_edit.text().strip() or "default_user",
+            "api_key": "",  # API key is hardcoded, not editable
+            "user_id": self.user_id_display.text().strip() or "default_user",
             "interval": int(self.interval_spin.value()),
             "watch_dirs": watch_dirs,
             "always_recent": self.config.get("always_recent", 3),
@@ -1320,11 +1273,31 @@ class OverlayWindow(QWidget):
             _to_companion_q.put(("STOP", None))
             self.signals.log.emit("Requested stop.")
 
+    def update_chat_enabled_state(self):
+        """Enable or disable chat based on authentication status"""
+        is_authenticated = bool(self.firebase_auth and self.firebase_auth.is_authenticated())
+
+        # Enable/disable chat input and button
+        self.ask_edit.setEnabled(is_authenticated)
+        self.ask_btn.setEnabled(is_authenticated)
+        self.start_btn.setEnabled(is_authenticated)
+
+        # Update placeholder text
+        if not is_authenticated:
+            self.ask_edit.setPlaceholderText("Sign in to use chat")
+            self.response_area.setPlaceholderText("Please sign in to your Google account to use chat features")
+        else:
+            self.ask_edit.setPlaceholderText("Ask Anything")
+            self.response_area.setPlaceholderText("")
+
     def on_ask(self):
+        # Check authentication before allowing chat
+        if not (self.firebase_auth and self.firebase_auth.is_authenticated()):
+            return
+
         q = self.ask_edit.text().strip()
         if not q:
             return
-        self.signals.log.emit(f"> {q}")
         _to_companion_q.put(("ASK", q))
         # optionally clear input
         self.ask_edit.clear()
@@ -1384,22 +1357,6 @@ class OverlayWindow(QWidget):
             self.google_signin_btn.setEnabled(True)
             self.google_signin_btn.setText("🔐 Sign in with Google")
 
-    def on_anonymous_signin(self):
-        """Handle anonymous sign in"""
-        if not self.firebase_auth:
-            self.signals.log.emit("<span style='color: #EF4444;'>Firebase Auth not initialized. Create firebase_config.json</span>")
-            return
-
-        try:
-            result = self.firebase_auth.sign_in_anonymous()
-            if result['success']:
-                self.signals.log.emit(f"<span style='color: #10B981;'>Signed in anonymously!</span>")
-                self.signals.auth_update.emit(result['user'])
-            else:
-                self.signals.log.emit(f"<span style='color: #EF4444;'>Anonymous sign in failed: {result['message']}</span>")
-        except Exception as e:
-            self.signals.log.emit(f"<span style='color: #EF4444;'>Error: {str(e)}</span>")
-
     def on_signout(self):
         """Handle user sign out"""
         if not self.firebase_auth:
@@ -1421,13 +1378,13 @@ class OverlayWindow(QWidget):
         if 'email' in user_data and user_data['email']:
             # Use email as user_id (sanitized)
             user_id = user_data['email'].replace('@', '_at_').replace('.', '_')
-            self.user_id_edit.setText(user_id)
+            self.user_id_display.setText(user_id)
             self.config['user_id'] = user_id
             self.auth_status_lbl.setText(f"AUTHENTICATED: {user_data['email']}")
         else:
             # Use anonymous user ID
             user_id = f"anonymous_{user_data.get('localId', 'unknown')[:8]}"
-            self.user_id_edit.setText(user_id)
+            self.user_id_display.setText(user_id)
             self.config['user_id'] = user_id
             self.auth_status_lbl.setText("AUTHENTICATED: Anonymous User")
 
@@ -1440,7 +1397,6 @@ class OverlayWindow(QWidget):
         self.signout_btn.setEnabled(True)
         self.google_signin_btn.setEnabled(False)
         self.google_signin_btn.setText("✓ Signed In")
-        self.anonymous_btn.setEnabled(False)
 
         # Display user info
         user_info = f"""<span style='color: #10B981; font-weight: 600;'>Authentication Successful!</span><br><br>"""
@@ -1453,7 +1409,10 @@ class OverlayWindow(QWidget):
 
         self.user_info_area.setHtml(user_info)
 
-        # Switch to Auth tab to show the updated UI
+        # Enable chat functionality now that user is authenticated
+        self.update_chat_enabled_state()
+
+        # Switch to Account tab to show the updated UI
         self.tabs.setCurrentIndex(2)
 
         print(f"🎨 UI updated - Status: {self.auth_status_lbl.text()}")
@@ -1466,22 +1425,23 @@ class OverlayWindow(QWidget):
         self.signout_btn.setEnabled(False)
         self.google_signin_btn.setEnabled(True)
         self.google_signin_btn.setText("🔐 Sign in with Google")
-        self.anonymous_btn.setEnabled(True)
         self.user_info_area.clear()
 
         # Reset to default user_id
         default_user_id = "default_user"
-        self.user_id_edit.setText(default_user_id)
+        self.user_id_display.setText(default_user_id)
         self.config['user_id'] = default_user_id
 
         # Update companion's user_id
         print(f"🔄 Resetting companion user_id to: {default_user_id}")
         _to_companion_q.put(("UPDATE_CONFIG", {"user_id": default_user_id}))
-        self.signals.log.emit(f"<span style='color: #71717A;'>🔄 Reset mem0 user_id to: {default_user_id}</span>")
+
+        # Disable chat functionality when signed out
+        self.update_chat_enabled_state()
 
     def append_log(self, text: str):
-        ts = time.strftime("%H:%M:%S")
-        self.log_area.append(f"<span style='color: #71717A; font-size: 10px;'>[{ts}]</span> <span style='color: #D4D4D8;'>{text}</span>")
+        # Log area removed - logs are no longer displayed
+        pass
 
     def set_status(self, text: str):
         self.status_lbl.setText(text)
@@ -1763,7 +1723,7 @@ def load_config():
     default = {
         "api_key": "",
         "user_id": "default_user",
-        "interval": 60,
+        "interval": 5,
         "watch_dirs": [],
         "always_recent": 3,
         "qa_model": "gemini"
