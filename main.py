@@ -257,7 +257,7 @@ class CompanionRunner(threading.Thread):
         # Pass directly to the class
         kwargs = {
             "api_key": HARD_CODED_API_KEY,
-            "capture_interval": self.config.get("interval", 60),
+            "capture_interval": self.config.get("interval", 10),
             "watch_dirs": self.config.get("watch_dirs", []),
             "always_recent": self.config.get("always_recent", 3),
             "user_id": user_id,
@@ -647,7 +647,7 @@ class OverlayWindow(QWidget):
         self.interval_spin = QSpinBox()
         self.interval_spin.setObjectName("modernSpinBox")
         self.interval_spin.setRange(1, 86400)
-        self.interval_spin.setValue(int(self.config.get("interval", 5)))
+        self.interval_spin.setValue(int(self.config.get("interval", 10)))
         self.interval_spin.setSuffix(" sec")
         self.interval_spin.setFixedHeight(38)
         self.interval_spin.setFixedWidth(125)
@@ -1412,6 +1412,9 @@ class OverlayWindow(QWidget):
         # Enable chat functionality now that user is authenticated
         self.update_chat_enabled_state()
 
+        # Start the auto-refresh timer to keep the session alive
+        self.start_auth_token_refresh_timer()
+
         # Switch to Account tab to show the updated UI
         self.tabs.setCurrentIndex(2)
 
@@ -1426,6 +1429,11 @@ class OverlayWindow(QWidget):
         self.google_signin_btn.setEnabled(True)
         self.google_signin_btn.setText("🔐 Sign in with Google")
         self.user_info_area.clear()
+
+        # Stop the auth refresh timer
+        if self.auth_refresh_timer is not None and self.auth_refresh_timer.isActive():
+            self.auth_refresh_timer.stop()
+            print("🛑 Stopped auth refresh timer")
 
         # Reset to default user_id
         default_user_id = "default_user"
@@ -1723,7 +1731,7 @@ def load_config():
     default = {
         "api_key": "",
         "user_id": "default_user",
-        "interval": 5,
+        "interval": 10,
         "watch_dirs": [],
         "always_recent": 3,
         "qa_model": "gemini"

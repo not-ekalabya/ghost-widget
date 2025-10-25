@@ -48,13 +48,13 @@ except ImportError:
     print("Warning: GitHub integration not available. Install with: pip install PyGithub")
 
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=60, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini"):
+    def __init__(self, api_key, capture_interval=10, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini"):
         """
         Initialize the background companion with RAG support and autonomous content generation
 
         Args:
             api_key: Google Gemini API key
-            capture_interval: Seconds between screenshots (default: 60)
+            capture_interval: Seconds between screenshots (default: 10)
             db_path: Path to SQLite database
             watch_dirs: List of directories to watch for file context
             always_recent: Number of most recent contexts to always include (default: 3)
@@ -3604,8 +3604,8 @@ def main():
     parser.add_argument('--api-key', required=True, help='Google Gemini API key')
     parser.add_argument('--user-id', type=str, default='default_user',
                        help='User ID for per-user memory separation (default: default_user)')
-    parser.add_argument('--interval', type=int, default=60,
-                       help='Capture interval in seconds (default: 60)')
+    parser.add_argument('--interval', type=int, default=10,
+                       help='Capture interval in seconds (default: 10)')
     parser.add_argument('--watch-dirs', nargs='+',
                        help='Directories to watch for file context (e.g., ~/Documents ~/Projects)')
     parser.add_argument('--question', help='Question to ask (for query mode)')
