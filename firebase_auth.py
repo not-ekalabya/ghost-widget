@@ -234,7 +234,8 @@ class FirebaseAuth:
                 "email": firebase_result.get('email', ''),
                 "displayName": firebase_result.get('displayName', ''),
                 "photoUrl": firebase_result.get('photoUrl', ''),
-                "expiresIn": firebase_result.get('expiresIn', 3600)
+                "expiresIn": firebase_result.get('expiresIn', 3600),
+                "token_issued_at": time.time()  # Mark when token was issued
             }
 
             print(f"👤 User: {self.current_user.get('email')} ({self.current_user.get('displayName')})")
@@ -263,7 +264,8 @@ class FirebaseAuth:
                 "idToken": user['idToken'],
                 "refreshToken": user['refreshToken'],
                 "localId": user['localId'],
-                "expiresIn": user.get('expiresIn', 3600)
+                "expiresIn": user.get('expiresIn', 3600),
+                "token_issued_at": time.time()  # Mark when token was issued
             }
 
             # Save auth state for persistence
@@ -294,14 +296,16 @@ class FirebaseAuth:
                 self.current_user.update({
                     "idToken": user['idToken'],
                     "refreshToken": user['refreshToken'],
-                    "expiresIn": user.get('expiresIn', 3600)
+                    "expiresIn": user.get('expiresIn', 3600),
+                    "token_issued_at": time.time()  # Mark when new token was issued
                 })
             else:
                 self.current_user = {
                     "idToken": user['idToken'],
                     "refreshToken": user['refreshToken'],
                     "userId": user.get('userId'),
-                    "expiresIn": user.get('expiresIn', 3600)
+                    "expiresIn": user.get('expiresIn', 3600),
+                    "token_issued_at": time.time()  # Mark when new token was issued
                 }
 
             # Save updated auth state
@@ -362,6 +366,10 @@ class FirebaseAuth:
             return
 
         try:
+            # Store when the token was actually issued (for accurate expiration tracking)
+            if 'token_issued_at' not in self.current_user:
+                self.current_user['token_issued_at'] = time.time()
+
             auth_data = {
                 "user": self.current_user,
                 "saved_at": time.time()
@@ -383,12 +391,14 @@ class FirebaseAuth:
             with open(self.auth_cache_file, 'r') as f:
                 auth_data = json.load(f)
 
-            saved_at = float(auth_data.get('saved_at', 0))
             user_data = auth_data.get('user', {})
 
             # Check if token is expired (tokens expire after 1 hour = 3600 seconds)
             expires_in = int(user_data.get('expiresIn', 3600))
-            time_elapsed = time.time() - saved_at
+
+            # Use token_issued_at if available, otherwise fall back to saved_at
+            token_issued_at = float(user_data.get('token_issued_at', auth_data.get('saved_at', 0)))
+            time_elapsed = time.time() - token_issued_at
 
             if time_elapsed < expires_in:
                 # Token is still valid
@@ -397,19 +407,27 @@ class FirebaseAuth:
                 return True
             else:
                 # Token expired, try to refresh
-                print("🔄 Auth token expired, attempting to refresh...")
+                print(f"🔄 Auth token expired ({int(time_elapsed/60)} minutes old), attempting to refresh...")
                 refresh_token = user_data.get('refreshToken')
 
                 if refresh_token:
-                    result = self.refresh_token(refresh_token)
-                    if result['success']:
-                        print("✅ Successfully refreshed auth token")
-                        self._save_auth_state()  # Save the new token
-                        return True
-                    else:
-                        print(f"❌ Token refresh failed: {result['message']}")
-                        self._clear_auth_state()
-                        return False
+                    # Try to refresh with retry logic (up to 3 attempts)
+                    max_retries = 3
+                    for attempt in range(1, max_retries + 1):
+                        result = self.refresh_token(refresh_token)
+                        if result['success']:
+                            print(f"✅ Successfully refreshed auth token (attempt {attempt}/{max_retries})")
+                            return True
+                        else:
+                            print(f"⚠️ Token refresh attempt {attempt}/{max_retries} failed: {result['message']}")
+                            if attempt < max_retries:
+                                print(f"🔄 Retrying in 2 seconds...")
+                                time.sleep(2)
+
+                    # All retry attempts failed
+                    print("❌ Token refresh failed after all retries. Please sign in again.")
+                    self._clear_auth_state()
+                    return False
                 else:
                     print("❌ No refresh token available")
                     self._clear_auth_state()
@@ -417,6 +435,8 @@ class FirebaseAuth:
 
         except Exception as e:
             print(f"⚠️ Failed to load auth state: {e}")
+            import traceback
+            traceback.print_exc()
             self._clear_auth_state()
             return False
 
