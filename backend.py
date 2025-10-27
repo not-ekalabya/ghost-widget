@@ -2294,10 +2294,49 @@ Be detailed and informative."""
         else:
             return f"Unknown tool: {tool_name}"
     
+    def _get_related_memories_for_context(self, active_context, limit=5):
+        """Get existing memories related to current context for knowledge building"""
+        if not self.use_mem0 or not self.mem0_client:
+            return []
+
+        try:
+            # Create a search query from active context
+            file_list = active_context['files'][:5] if active_context['files'] else []
+            apps = active_context['applications'][:3] if active_context['applications'] else []
+
+            # Extract project names from file paths
+            project_names = set()
+            for file_path in file_list:
+                # Extract meaningful project directory names
+                parts = file_path.replace('\\', '/').split('/')
+                for part in parts:
+                    if part and not part.startswith('.') and len(part) > 2:
+                        project_names.add(part)
+
+            # Build search query
+            search_terms = list(project_names)[:3] + apps[:2]
+            if search_terms:
+                query = ' '.join(search_terms)
+
+                # Search existing memories
+                filters = {"user_id": self.user_id}
+                result = self.mem0_client.search(query=query, filters=filters, limit=limit)
+
+                if isinstance(result, dict) and 'results' in result:
+                    return result['results']
+                elif isinstance(result, list):
+                    return result
+
+            return []
+        except Exception as e:
+            print(f"   ⚠️ Could not retrieve related memories: {e}")
+            return []
+
     def _ai_analyze_and_store(self, screenshot_path, active_context):
         """
         AI-driven analysis that decides whether to store information
         The AI model analyzes the screen using vision and calls store_memory tool if deemed important
+        Now includes: file reading capabilities, access to related memories, project-specific analysis
         """
         try:
             with open(screenshot_path, 'rb') as f:
@@ -2308,10 +2347,25 @@ Be detailed and informative."""
             file_info = '\n'.join([f"  - {f}" for f in file_list]) if file_list else "  None"
             apps_info = ', '.join(active_context['applications'][:10]) if active_context['applications'] else 'None'
 
-            # Create model with store_memory tool
+            # Get existing related memories to build upon
+            print("   🔍 Searching for related memories...")
+            related_memories = self._get_related_memories_for_context(active_context, limit=5)
+
+            existing_memories_str = ""
+            if related_memories:
+                print(f"   📚 Found {len(related_memories)} related memories")
+                existing_memories_str = "\n**EXISTING RELATED MEMORIES (Build upon this knowledge):**\n"
+                for idx, mem in enumerate(related_memories[:5], 1):
+                    memory_text = mem.get('memory', '')
+                    created_at = mem.get('created_at', '')
+                    existing_memories_str += f"\n{idx}. [{created_at}] {memory_text[:200]}...\n"
+            else:
+                print("   📚 No related memories found - creating fresh context")
+
+            # Create model with ALL tools (including file reading)
             model_with_tools = genai.GenerativeModel(
                 'gemini-2.0-flash-exp',
-                tools=self.tools
+                tools=self.tools  # This includes file reading, store_memory, and all other tools
             )
 
             prompt = f"""You are an advanced AI memory system analyzing the user's screen activity using vision. Your job is to perform a COMPREHENSIVE analysis and determine if the current screen contains information worth storing as a long-term memory.
@@ -2320,6 +2374,45 @@ Be detailed and informative."""
 
 **Recently Accessed Files:**
 {file_info}
+{existing_memories_str}
+
+**CRITICAL: PROJECT-SPECIFIC ANALYSIS**
+
+The user works on MULTIPLE DIFFERENT PROJECTS. Your memories must be PROJECT-SPECIFIC, not generic!
+
+❌ BAD: "User project path is C:\\Projects\\app"
+❌ BAD: "Working on Python code"
+❌ BAD: "User is coding"
+
+✅ GOOD: "ghost-widget project: PyQt6 desktop app for AI screen capture with mem0 integration. Main file: C:\\projects\\ghost-widget\\main.py. Currently implementing memory card UI with QScrollArea and custom QFrame cards."
+
+✅ GOOD: "api-server project (C:\\work\\api-server): FastAPI backend with PostgreSQL. Working on authentication endpoints in auth.py:125. Implementing JWT token refresh logic with Redis caching."
+
+**PROJECT IDENTIFICATION REQUIREMENTS:**
+1. Extract project name from paths (e.g., "ghost-widget" from "C:\\projects\\ghost-widget\\main.py")
+2. Identify project type (web app, desktop app, API, library, etc.)
+3. Note key technologies/frameworks used
+4. Describe SPECIFIC work being done (which file, which function, what problem)
+5. Include relevant context (error being fixed, feature being added, etc.)
+
+**YOU HAVE TOOLS - USE THEM BEFORE STORING!**
+
+Available tools:
+- `read_file_as_text`: Read code files to understand project structure and content
+- `list_directory`: Explore project directories
+- `get_file_info`: Get file metadata
+- All other file system tools
+
+**EXPLORATION WORKFLOW:**
+1. See files on screen? → Read them with `read_file_as_text` to understand what user is actually working on
+2. See project directory? → Use `list_directory` to understand project structure
+3. See code? → Read the actual file to get function names, logic, imports
+4. See error? → Read the file to understand the context around that line
+
+**DO NOT STORE VAGUE INFORMATION!**
+- Reading files gives you specific function names, class names, logic details
+- This makes memories searchable and useful
+- Generic descriptions are useless later
 
 **COMPREHENSIVE ANALYSIS INSTRUCTIONS:**
 
@@ -2387,37 +2480,85 @@ Before deciding whether to store, perform a THOROUGH analysis of the screen extr
 - Repetitive content already seen
 - Just reading news/entertainment with no work context
 
-**IF STORING - USE `store_memory` TOOL WITH:**
+**MEMORY STORAGE PROCESS:**
 
-- **content**: EXHAUSTIVE description including:
-  * List ALL file paths discovered (use exact formatting)
-  * Describe what's visible in each window/panel
-  * Include relevant code snippets or text content
-  * Explain the activity and context
-  * Note any errors or issues visible
-  * Describe the project structure if visible
-  * Include technical details (languages, frameworks, etc.)
-  * Be extremely detailed - imagine someone needs to recreate this context
+**STEP 1: READ FILES FIRST (if file paths visible)**
+- Use `read_file_as_text` to read visible files
+- This gives you actual code content, function names, class definitions
+- Understand what the user is ACTUALLY working on
+- Get imports, dependencies, configurations
 
-- **summary**: One clear sentence capturing the essence
+**STEP 2: BUILD UPON EXISTING MEMORIES**
+- Review "EXISTING RELATED MEMORIES" above
+- How does current work connect to previous memories?
+- Is this continuing previous work?
+- Is this a new feature for known project?
+- Update/extend knowledge rather than duplicate
+
+**STEP 3: CREATE PROJECT-SPECIFIC MEMORY**
+
+Use `store_memory` with:
+
+- **content**: COMPREHENSIVE project-specific description:
+
+  **Required format:**
+  ```
+  PROJECT: [project-name] ([project-type])
+  LOCATION: [full absolute path to project root]
+  TECHNOLOGIES: [frameworks, languages, databases]
+
+  CURRENT WORK:
+  - File: [specific file with full path]
+  - Function/Class: [specific function or class being modified]
+  - Activity: [what specifically is being done]
+  - Context: [why - bug fix, new feature, refactoring, etc.]
+
+  DETAILS:
+  [Extracted information from reading files]
+  - Function signatures
+  - Key variables/classes
+  - Logic being implemented
+  - Dependencies/imports relevant to current work
+  - Error messages if debugging
+  - Code snippets if relevant
+
+  FILES INVOLVED:
+  [List ALL file paths]
+
+  CONNECTION TO EXISTING WORK:
+  [How this relates to previous memories if any]
+  ```
+
+- **summary**: PROJECT-SPECIFIC one-sentence summary
+  Format: "[project-name]: [specific action] in [specific file/component]"
+  Example: "ghost-widget: Implementing memory card UI with QScrollArea in main.py"
 
 - **importance**:
-  * "high" - Critical work, major bugs, important decisions, complex problem-solving
-  * "medium" - Regular development work, learning, useful information
-  * "low" - Minor tasks, simple browsing with context
+  * "high" - Critical features, major bugs, architecture decisions
+  * "medium" - Regular features, bug fixes, improvements
+  * "low" - Minor tweaks, documentation, simple changes
 
-- **tags**: 5-10 specific tags:
-  * Technologies/languages (python, react, postgres)
-  * Activity types (coding, debugging, learning, writing)
-  * Project names if visible
-  * Specific topics (authentication, api-design, database-migration)
-  * File types (backend, frontend, config, documentation)
+- **tags**: 8-12 SPECIFIC tags including:
+  * PROJECT NAME (e.g., "ghost-widget", "api-server")
+  * Specific technologies (e.g., "pyqt6", "fastapi", "postgresql")
+  * Activity type (e.g., "implementing-feature", "fixing-bug", "refactoring")
+  * Component names (e.g., "memory-ui", "auth-endpoint", "database-migration")
+  * File names without extension (e.g., "main", "auth", "config")
+  * Specific topics (e.g., "qscrollarea", "jwt-tokens", "card-layout")
 
-**OUTPUT REQUIREMENTS:**
-- If storing: Call `store_memory` with COMPREHENSIVE content including ALL file paths
-- If not storing: Respond "No storage needed - routine activity"
-- Extract MAXIMUM information when storing - don't summarize too much
-- Missing file paths or details = incomplete memory = lost context later
+**CRITICAL REQUIREMENTS:**
+1. ✅ USE TOOLS to read files and get details BEFORE storing
+2. ✅ PROJECT NAME must be in content and tags
+3. ✅ Specific file paths with full absolute paths
+4. ✅ Specific functions/classes/variables being worked on
+5. ✅ Build upon existing memories (reference them if related)
+6. ✅ Include code details from file reading
+7. ❌ NO generic descriptions like "working on code" or "user project"
+
+**DECISION:**
+- If worth storing: READ FILES FIRST, then call `store_memory` with project-specific details
+- If not worth storing: Respond "No storage needed - routine activity"
+- If unsure about project: READ FILES to understand before deciding
 
 Analyze the screen NOW and make your decision:"""
 
@@ -2428,8 +2569,8 @@ Analyze the screen NOW and make your decision:"""
                 {"mime_type": "image/png", "data": image_data}
             ])
 
-            # Handle tool calls (if AI decides to store)
-            max_iterations = 3
+            # Handle tool calls (AI can read files, then store)
+            max_iterations = 10  # Increased to allow file reading + storing
             iteration = 0
             memory_stored = False
 
@@ -2449,7 +2590,7 @@ Analyze the screen NOW and make your decision:"""
                 function_calls = [part for part in parts if hasattr(part, 'function_call') and part.function_call]
 
                 if not function_calls:
-                    # No function calls - AI decided not to store
+                    # No function calls - AI decided not to store or finished
                     # Extract text response
                     for part in parts:
                         if hasattr(part, 'text') and part.text:
@@ -2459,23 +2600,32 @@ Analyze the screen NOW and make your decision:"""
                                 print(f"   🤖 AI says: {part.text[:100]}")
                     break
 
-                # Execute store_memory tool calls
+                # Execute ALL tool calls (file reading, store_memory, etc.)
                 function_responses = []
                 for fc in function_calls:
                     tool_name = fc.function_call.name
                     tool_args = dict(fc.function_call.args)
 
+                    # Log tool usage
                     if tool_name == "store_memory":
                         memory_stored = True
-                        result = self._execute_tool(tool_name, tool_args)
-                        function_responses.append(
-                            genai.protos.Part(
-                                function_response=genai.protos.FunctionResponse(
-                                    name=tool_name,
-                                    response={"result": result}
-                                )
+                        print(f"   💾 AI is storing memory...")
+                    elif tool_name == "read_file_as_text":
+                        file_path = tool_args.get('file_path', 'unknown')
+                        print(f"   📖 AI is reading: {file_path}")
+                    elif tool_name in ["list_directory", "get_file_info"]:
+                        print(f"   🔍 AI is exploring: {tool_name}")
+
+                    # Execute the tool
+                    result = self._execute_tool(tool_name, tool_args)
+                    function_responses.append(
+                        genai.protos.Part(
+                            function_response=genai.protos.FunctionResponse(
+                                name=tool_name,
+                                response={"result": result}
                             )
                         )
+                    )
 
                 if function_responses:
                     response = chat.send_message(function_responses)
