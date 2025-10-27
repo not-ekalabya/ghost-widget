@@ -57,7 +57,7 @@ USE_PYQT6 = True
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
-    QGraphicsDropShadowEffect, QTabWidget, QComboBox
+    QGraphicsDropShadowEffect, QTabWidget, QComboBox, QScrollArea, QFrame
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
 from PyQt6.QtGui import QFont, QAction, QColor
@@ -297,6 +297,20 @@ class CompanionRunner(threading.Thread):
                 question = payload
                 resp = self._call_ask(question)
                 _from_companion_q.put(("RESPONSE", resp))
+            elif cmd == "GET_MEMORIES":
+                # Get all memories from backend
+                memories = self._get_memories()
+                _from_companion_q.put(("MEMORIES_LIST", memories))
+            elif cmd == "SEARCH_MEMORIES":
+                # Search memories by query
+                query = payload
+                memories = self._search_memories(query)
+                _from_companion_q.put(("SEARCH_RESULTS", memories))
+            elif cmd == "DELETE_MEMORY":
+                # Delete a memory by ID
+                memory_id = payload
+                success = self._delete_memory(memory_id)
+                _from_companion_q.put(("DELETE_SUCCESS", success))
             elif cmd == "UPDATE_CONFIG":
                 new_conf = payload or {}
                 self._update_config(new_conf)
@@ -386,6 +400,79 @@ class CompanionRunner(threading.Thread):
                             print(f"🔄 Updated companion user_id to: {v}")
                     except Exception:
                         pass
+
+    def _get_memories(self):
+        """Get all memories from the companion's mem0 client"""
+        if not self.companion:
+            return []
+
+        try:
+            # Check if companion has mem0_client
+            if hasattr(self.companion, 'mem0_client') and self.companion.mem0_client:
+                user_id = getattr(self.companion, 'user_id', 'default_user')
+                # Get all memories for this user - mem0 API v2 requires filters parameter
+                filters = {"user_id": user_id}
+                result = self.companion.mem0_client.get_all(filters=filters)
+
+                # mem0 returns a dict with 'results' key containing list of memories
+                if isinstance(result, dict) and 'results' in result:
+                    return result['results']
+                elif isinstance(result, list):
+                    return result
+                else:
+                    return []
+            else:
+                print("⚠️ mem0_client not available")
+                return []
+        except Exception as e:
+            print(f"Error getting memories: {e}")
+            return []
+
+    def _search_memories(self, query: str):
+        """Search memories using mem0 search functionality"""
+        if not self.companion:
+            return []
+
+        try:
+            # Check if companion has mem0_client
+            if hasattr(self.companion, 'mem0_client') and self.companion.mem0_client:
+                user_id = getattr(self.companion, 'user_id', 'default_user')
+                # Search memories for this user - mem0 API requires filters parameter
+                filters = {"user_id": user_id}
+                result = self.companion.mem0_client.search(query=query, filters=filters, limit=50)
+
+                # mem0 returns a dict with 'results' key containing list of memories
+                if isinstance(result, dict) and 'results' in result:
+                    return result['results']
+                elif isinstance(result, list):
+                    return result
+                else:
+                    return []
+            else:
+                print("⚠️ mem0_client not available")
+                return []
+        except Exception as e:
+            print(f"Error searching memories: {e}")
+            return []
+
+    def _delete_memory(self, memory_id: str):
+        """Delete a memory by ID"""
+        if not self.companion:
+            return False
+
+        try:
+            # Check if companion has mem0_client
+            if hasattr(self.companion, 'mem0_client') and self.companion.mem0_client:
+                # Delete the memory
+                self.companion.mem0_client.delete(memory_id)
+                print(f"✅ Deleted memory: {memory_id}")
+                return True
+            else:
+                print("⚠️ mem0_client not available")
+                return False
+        except Exception as e:
+            print(f"Error deleting memory: {e}")
+            return False
 
 
 # ---------- Qt UI components ----------
@@ -879,6 +966,72 @@ class OverlayWindow(QWidget):
         # Add connected apps tab
         self.tabs.addTab(apps_tab, "Connected Apps")
 
+        # === MEMORIES TAB ===
+        memories_tab = QWidget()
+        memories_layout = QVBoxLayout(memories_tab)
+        memories_layout.setContentsMargins(0, 16, 0, 0)
+        memories_layout.setSpacing(12)
+
+        # Top section with search and buttons
+        top_section = QHBoxLayout()
+        top_section.setSpacing(8)
+
+        self.memory_search = QLineEdit()
+        self.memory_search.setObjectName("modernInput")
+        self.memory_search.setPlaceholderText("Search memories...")
+        self.memory_search.textChanged.connect(self.on_memory_search)
+        self.memory_search.setFixedHeight(32)
+        top_section.addWidget(self.memory_search, 1)
+
+        search_btn = QPushButton("Search")
+        search_btn.setObjectName("accentButton")
+        search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        search_btn.clicked.connect(self.on_memory_search_btn)
+        search_btn.setFixedHeight(32)
+        search_btn.setFixedWidth(70)
+        top_section.addWidget(search_btn)
+
+        refresh_btn = QPushButton("↻")
+        refresh_btn.setObjectName("iconButton")
+        refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        refresh_btn.clicked.connect(self.on_refresh_memories)
+        refresh_btn.setFixedSize(32, 32)
+        refresh_btn.setToolTip("Refresh memories")
+        top_section.addWidget(refresh_btn)
+
+        memories_layout.addLayout(top_section)
+
+        # Scroll area for memory cards
+        scroll_area = QScrollArea()
+        scroll_area.setObjectName("memoryScrollArea")
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        # Container widget for memory cards
+        self.memories_container = QWidget()
+        self.memories_container.setObjectName("memoriesContainer")
+        self.memories_cards_layout = QVBoxLayout(self.memories_container)
+        self.memories_cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.memories_cards_layout.setSpacing(8)
+        self.memories_cards_layout.addStretch()
+
+        scroll_area.setWidget(self.memories_container)
+        memories_layout.addWidget(scroll_area, 1)
+
+        # Status label for memory operations
+        self.memory_status_lbl = QLabel("")
+        self.memory_status_lbl.setObjectName("fieldLabel")
+        self.memory_status_lbl.setStyleSheet("color: #71717A; font-size: 9px; margin-top: 4px;")
+        self.memory_status_lbl.setWordWrap(True)
+        memories_layout.addWidget(self.memory_status_lbl)
+
+        # Store selected memory ID for deletion
+        self.selected_memory_id = None
+
+        # Add memories tab
+        self.tabs.addTab(memories_tab, "Memories")
+
         container.setLayout(content)
         root.addWidget(container)
         self.setLayout(root)
@@ -1226,6 +1379,64 @@ class OverlayWindow(QWidget):
                 background: rgba(255, 255, 255, 0.06);
                 color: #A1A1AA;
             }
+
+            /* Memory Cards */
+            #memoryScrollArea {
+                background: transparent;
+                border: none;
+            }
+
+            #memoriesContainer {
+                background: transparent;
+            }
+
+            #memoryCard {
+                background: rgba(255, 255, 255, 0.03);
+                border: none;
+                border-radius: 8px;
+                margin: 0px;
+            }
+
+            #memoryCard:hover {
+                background: rgba(255, 255, 255, 0.05);
+            }
+
+            #memoryDeleteBtn {
+                background: transparent;
+                color: #71717A;
+                border: none;
+                border-radius: 10px;
+                font-size: 18px;
+                font-weight: 300;
+            }
+
+            #memoryDeleteBtn:hover {
+                background: rgba(239, 68, 68, 0.15);
+                color: #EF4444;
+            }
+
+            #memoryDeleteBtn:pressed {
+                background: rgba(239, 68, 68, 0.25);
+            }
+
+            /* Icon Button */
+            #iconButton {
+                background: rgba(255, 255, 255, 0.04);
+                color: #D4D4D8;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: 400;
+            }
+
+            #iconButton:hover {
+                background: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+            }
+
+            #iconButton:pressed {
+                background: rgba(255, 255, 255, 0.03);
+            }
         """)
 
     def on_add_dir(self):
@@ -1446,6 +1657,133 @@ class OverlayWindow(QWidget):
 
         # Disable chat functionality when signed out
         self.update_chat_enabled_state()
+
+    def on_refresh_memories(self):
+        """Request to load all memories from backend"""
+        self.memory_status_lbl.setText("Loading...")
+        self.memory_status_lbl.setStyleSheet("color: #60A5FA; font-size: 9px; margin-top: 4px;")
+        _to_companion_q.put(("GET_MEMORIES", None))
+
+    def on_memory_search(self):
+        """Auto-search as user types (debounced by natural typing speed)"""
+        # This is called on every text change, but we'll only search when user clicks Search button
+        # or we could add a debounce timer here
+        pass
+
+    def on_memory_search_btn(self):
+        """Handle search button click"""
+        query = self.memory_search.text().strip()
+        if query:
+            self.memory_status_lbl.setText(f"Searching...")
+            self.memory_status_lbl.setStyleSheet("color: #60A5FA; font-size: 9px; margin-top: 4px;")
+            _to_companion_q.put(("SEARCH_MEMORIES", query))
+        else:
+            # If search is empty, refresh all memories
+            self.on_refresh_memories()
+
+    def on_delete_memory(self, memory_id):
+        """Delete selected memory"""
+        if memory_id:
+            self.memory_status_lbl.setText(f"Deleting memory...")
+            self.memory_status_lbl.setStyleSheet("color: #EF4444; font-size: 9px; margin-top: 4px;")
+            _to_companion_q.put(("DELETE_MEMORY", memory_id))
+        else:
+            self.memory_status_lbl.setText("No memory selected")
+            self.memory_status_lbl.setStyleSheet("color: #EF4444; font-size: 9px; margin-top: 4px;")
+
+    def update_memories_display(self, memories):
+        """Update the memories display with card-based layout"""
+        # Clear existing cards
+        while self.memories_cards_layout.count() > 1:  # Keep the stretch
+            item = self.memories_cards_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not memories:
+            # Show empty state
+            empty_label = QLabel("No memories found")
+            empty_label.setObjectName("emptyStateLabel")
+            empty_label.setStyleSheet("color: #52525B; font-size: 12px; padding: 40px; text-align: center;")
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.memories_cards_layout.insertWidget(0, empty_label)
+            self.memory_status_lbl.setText("")
+            return
+
+        # Create card for each memory
+        for memory in memories:
+            # Extract memory data
+            memory_id = memory.get('id', '')
+            memory_text = memory.get('memory', '')
+            created_at = memory.get('created_at', '')
+
+            # Create memory card
+            card = self.create_memory_card(memory_id, memory_text, created_at)
+            self.memories_cards_layout.insertWidget(self.memories_cards_layout.count() - 1, card)
+
+        self.memory_status_lbl.setText(f"{len(memories)} memories")
+        self.memory_status_lbl.setStyleSheet("color: #71717A; font-size: 9px; margin-top: 4px;")
+
+    def create_memory_card(self, memory_id, memory_text, created_at):
+        """Create a minimalist card widget for a single memory"""
+        card = QFrame()
+        card.setObjectName("memoryCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(12, 10, 12, 10)
+        card_layout.setSpacing(6)
+
+        # Top row: timestamp and delete button
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+
+        # Minimalist timestamp
+        if created_at:
+            # Parse and format timestamp more minimally
+            from datetime import datetime
+            try:
+                # Try to parse ISO format
+                dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                # Format as relative time or simple date
+                now = datetime.now(dt.tzinfo)
+                diff = now - dt
+                if diff.days == 0:
+                    time_str = dt.strftime("%H:%M")
+                elif diff.days == 1:
+                    time_str = "Yesterday"
+                elif diff.days < 7:
+                    time_str = f"{diff.days}d ago"
+                else:
+                    time_str = dt.strftime("%b %d")
+            except:
+                time_str = created_at[:10] if len(created_at) > 10 else created_at
+        else:
+            time_str = ""
+
+        timestamp_lbl = QLabel(time_str)
+        timestamp_lbl.setObjectName("memoryTimestamp")
+        timestamp_lbl.setStyleSheet("color: #52525B; font-size: 9px; font-weight: 500;")
+        top_row.addWidget(timestamp_lbl)
+
+        top_row.addStretch()
+
+        # Delete button (minimalist)
+        delete_btn = QPushButton("×")
+        delete_btn.setObjectName("memoryDeleteBtn")
+        delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        delete_btn.setFixedSize(20, 20)
+        delete_btn.setToolTip("Delete memory")
+        delete_btn.clicked.connect(lambda checked, mid=memory_id: self.on_delete_memory(mid))
+        top_row.addWidget(delete_btn)
+
+        card_layout.addLayout(top_row)
+
+        # Memory text with word wrap
+        text_lbl = QLabel(memory_text)
+        text_lbl.setObjectName("memoryText")
+        text_lbl.setWordWrap(True)
+        text_lbl.setStyleSheet("color: #D4D4D8; font-size: 12px; line-height: 1.5;")
+        card_layout.addWidget(text_lbl)
+
+        return card
 
     def append_log(self, text: str):
         # Log area removed - logs are no longer displayed
@@ -1697,6 +2035,25 @@ class OverlayWindow(QWidget):
                     self.signals.log.emit(f"<span style='color: #EF4444;'>Google Sign-In failed: {result['message']}</span>")
                     self.google_signin_btn.setEnabled(True)
                     self.google_signin_btn.setText("🔐 Sign in with Google")
+            elif typ == "MEMORIES_LIST":
+                # Handle memories list response
+                memories = payload
+                self.update_memories_display(memories)
+            elif typ == "SEARCH_RESULTS":
+                # Handle search results
+                memories = payload
+                self.update_memories_display(memories)
+            elif typ == "DELETE_SUCCESS":
+                # Handle delete success
+                success = payload
+                if success:
+                    self.memory_status_lbl.setText("Deleted")
+                    self.memory_status_lbl.setStyleSheet("color: #10B981; font-size: 9px; margin-top: 4px;")
+                    # Refresh the list after deletion
+                    self.on_refresh_memories()
+                else:
+                    self.memory_status_lbl.setText("Delete failed")
+                    self.memory_status_lbl.setStyleSheet("color: #EF4444; font-size: 9px; margin-top: 4px;")
             else:
                 self.signals.log.emit(f"[{typ}] {payload}")
 

@@ -695,26 +695,94 @@ Recently Accessed Files:
 {file_info}
 """
             
-            prompt = f"""Analyze this screenshot in detail.
+            prompt = f"""Analyze this screenshot with EXTREME DETAIL. Extract EVERY piece of information visible on screen.
 
 Additional Context:
 {context_info}
 
-Provide:
-1. What application(s) or websites are visible
-2. What the user appears to be doing
-3. Key content visible (text, images, UI elements)
-4. Any important context or information
-5. **IMPORTANT: Extract and mention ANY file paths visible on screen** (from file explorers, title bars, terminal windows, IDE tabs, browser URLs, etc.)
-6. Connection to recently accessed files (if relevant) - mention full file paths from the context
-7. Suggested tags for categorization
+**COMPREHENSIVE ANALYSIS REQUIREMENTS:**
 
-**FILE PATH EXTRACTION IS CRITICAL:**
-- Look carefully for file paths in window titles, terminal outputs, file explorers, IDEs, and browser address bars
-- Record complete absolute paths whenever visible (e.g., C:\\Users\\Documents\\report.pdf, /home/user/project/main.py)
-- Include file extensions
+1. **APPLICATIONS & WINDOWS:**
+   - Name every visible application/window
+   - Note window titles EXACTLY as shown (including full file paths in title bars)
+   - Identify browser tabs with full URLs
+   - Note any system notifications or popups
 
-Be thorough and specific. This will be used for context retrieval later."""
+2. **FILE PATHS - CRITICAL PRIORITY:**
+   Extract EVERY file path visible anywhere on screen:
+   - **Window titles** (e.g., "main.py - Visual Studio Code", "C:\\Projects\\app\\config.json - Notepad++")
+   - **File explorers** (address bar, folder tree, file names with full paths)
+   - **IDE/Editor tabs** (file names, breadcrumbs, project structures)
+   - **Terminal/Command prompt** (pwd output, cd commands, file operations, ls/dir output)
+   - **Browser URLs** (full URLs including protocols, paths, query parameters)
+   - **Error messages** (stack traces with file paths and line numbers)
+   - **File dialogs** (save/open dialogs with visible paths)
+   - **Status bars** (often show current file path)
+   - **Breadcrumbs** (navigation paths in apps)
+   - **Recent files lists** (in menus or sidebars)
+   - **Git/version control** (repo paths, branch names, file diffs)
+
+   Format paths EXACTLY as shown, preserving:
+   - Full absolute paths (C:\\Users\\..., /home/user/..., etc.)
+   - Relative paths (./src/..., ../config/...)
+   - File extensions
+   - Line numbers if visible (file.py:125)
+
+3. **VISIBLE TEXT CONTENT:**
+   - Code snippets (include language, function names, key logic)
+   - Document text (headings, paragraphs, key points)
+   - Chat messages (sender, message content)
+   - Form fields (labels, entered values if visible)
+   - Button labels and menu items
+   - Search queries
+   - Error messages and warnings (full text)
+   - Console/terminal output (commands and results)
+
+4. **USER ACTIVITY ANALYSIS:**
+   - What is the user actively doing? (coding, writing, debugging, browsing, etc.)
+   - What stage of work are they in? (planning, implementing, reviewing, etc.)
+   - What problem are they solving or task are they completing?
+   - Are they learning something new or working on familiar content?
+
+5. **UI ELEMENTS & STRUCTURE:**
+   - Sidebar content (project structure, file tree, outline)
+   - Panels/panes (code editor, preview, console, debug)
+   - Toolbar buttons and their state (enabled/disabled)
+   - Selected items or focused elements
+   - Scroll position indicators
+   - Minimap or overview pane contents
+
+6. **TECHNICAL CONTEXT:**
+   - Programming language(s) visible
+   - Framework or library names
+   - Version numbers or git commit hashes
+   - Dependencies or imports
+   - Configuration settings
+   - Environment variables
+   - Database names or table structures
+
+7. **METADATA & TIMESTAMPS:**
+   - File modification times if visible
+   - Message timestamps in chat apps
+   - Commit times in version control
+   - Last saved indicators
+
+8. **CONNECTIONS & RELATIONSHIPS:**
+   - How do visible files relate to context files?
+   - Are multiple related files open?
+   - Is there a project structure visible?
+   - Are there references between files?
+
+9. **SUGGESTED TAGS:**
+   Provide 5-10 specific tags based on:
+   - Languages/technologies
+   - Activity type
+   - Project names
+   - File types
+   - Topics or domains
+
+**OUTPUT FORMAT:**
+Structure your analysis clearly with sections. Start with file paths section listing EVERY discovered path. Be exhaustive and specific. This analysis is used for precise context retrieval - missing details means lost context."""
             
             response = self.model.generate_content([
                 prompt,
@@ -2246,52 +2314,112 @@ Be detailed and informative."""
                 tools=self.tools
             )
 
-            prompt = f"""You are an AI memory system analyzing the user's screen activity using vision. Your job is to determine if the current screen content contains information worth storing as a long-term memory.
+            prompt = f"""You are an advanced AI memory system analyzing the user's screen activity using vision. Your job is to perform a COMPREHENSIVE analysis and determine if the current screen contains information worth storing as a long-term memory.
 
 **Active Applications:** {apps_info}
 
 **Recently Accessed Files:**
 {file_info}
 
-**Your Task:**
-Analyze this screen content and decide if it contains information worth remembering. Consider:
+**COMPREHENSIVE ANALYSIS INSTRUCTIONS:**
 
-1. **STORE AS MEMORY if:**
-   - User is working on something important (coding, writing, research)
-   - New insights, ideas, or discoveries are visible
-   - Important information is being viewed (documents, articles, data)
-   - A significant task or project is in progress
-   - Novel or unique content (not just browsing social media)
-   - User appears to be learning something new
-   - Important communications or decisions
-   - **Any file paths are visible on screen** (file explorers, terminal, IDE, browser)
+Before deciding whether to store, perform a THOROUGH analysis of the screen extracting:
 
-2. **DO NOT STORE if:**
-   - Routine browsing or scrolling
-   - Repetitive or already-seen content
-   - Just navigating menus or settings
-   - Idle screen or screensaver
-   - Entertainment/casual content with no learning value
-   - Similar to recently stored memories
+1. **FILE PATHS - HIGHEST PRIORITY:**
+   Scan EVERY visible location for file paths:
+   - Window titles (full paths in title bars)
+   - File explorer address bars and navigation
+   - IDE/Editor tabs, breadcrumbs, and file trees
+   - Terminal/Console (pwd, cd, ls/dir output, file operations)
+   - Browser URLs (full URLs with protocols and paths)
+   - Status bars (current file indicators)
+   - Error messages and stack traces (file:line numbers)
+   - Git panels (repository paths, file diffs)
+   - Recent files/open files lists
+   - Project structure panels
 
-**Available Tool:**
-- `store_memory`: Call this function to store important information
-  - content: Detailed description of what's happening and why it's important. **MUST include any file paths visible on screen!**
-  - summary: One-sentence summary
-  - importance: "high" for critical info, "medium" for useful info, "low" for minor info
-  - tags: Array of relevant tags (e.g., ["coding", "python", "bug-fix"])
+   Extract COMPLETE paths including:
+   - Full absolute paths (C:\\Projects\\app\\main.py)
+   - Relative paths (./src/utils/helper.js)
+   - File extensions
+   - Line numbers if shown (main.py:125)
 
-**Instructions:**
-1. Analyze the screen content carefully
-2. **CRITICAL: Extract ALL visible file paths** from window titles, file explorers, terminal output, IDE tabs, browser URLs, etc.
-3. If worth storing, call `store_memory` with comprehensive details including:
-   - Complete file paths with extensions (e.g., C:\\Users\\Documents\\report.pdf)
-   - What the user was doing with those files
-   - Application context
-4. If not worth storing, simply respond with "No storage needed - routine activity"
-5. Only store truly important or novel information
+2. **DETAILED CONTENT EXTRACTION:**
+   - All visible text (code, documents, messages, commands)
+   - Function/class/variable names in code
+   - Document headings and key points
+   - Terminal commands and output
+   - Error messages (complete text)
+   - UI labels and menu items
+   - Search queries or form inputs
 
-Make your decision now:"""
+3. **TECHNICAL CONTEXT:**
+   - Programming languages/frameworks
+   - Library names and versions
+   - Configuration settings
+   - Git branches/commits
+   - Database/API names
+   - Dependencies and imports
+
+4. **USER ACTIVITY:**
+   - What specific task is being performed?
+   - What problem is being solved?
+   - What stage of work? (planning, coding, debugging, reviewing)
+   - Learning new concepts or working on familiar topics?
+
+**STORAGE DECISION CRITERIA:**
+
+**STORE AS MEMORY if:**
+- User is actively working on code, writing, or research
+- New concepts, insights, or learning is visible
+- Important project work or problem-solving in progress
+- ANY file paths are visible (crucial for context)
+- Significant content is being created or modified
+- Technical discussions or documentation visible
+- Configuration or setup work
+- Debugging or error resolution
+- Novel or educational content
+
+**DO NOT STORE if:**
+- Idle screen or screensaver
+- Just browsing social media casually
+- Routine navigation (no substantive content)
+- Repetitive content already seen
+- Just reading news/entertainment with no work context
+
+**IF STORING - USE `store_memory` TOOL WITH:**
+
+- **content**: EXHAUSTIVE description including:
+  * List ALL file paths discovered (use exact formatting)
+  * Describe what's visible in each window/panel
+  * Include relevant code snippets or text content
+  * Explain the activity and context
+  * Note any errors or issues visible
+  * Describe the project structure if visible
+  * Include technical details (languages, frameworks, etc.)
+  * Be extremely detailed - imagine someone needs to recreate this context
+
+- **summary**: One clear sentence capturing the essence
+
+- **importance**:
+  * "high" - Critical work, major bugs, important decisions, complex problem-solving
+  * "medium" - Regular development work, learning, useful information
+  * "low" - Minor tasks, simple browsing with context
+
+- **tags**: 5-10 specific tags:
+  * Technologies/languages (python, react, postgres)
+  * Activity types (coding, debugging, learning, writing)
+  * Project names if visible
+  * Specific topics (authentication, api-design, database-migration)
+  * File types (backend, frontend, config, documentation)
+
+**OUTPUT REQUIREMENTS:**
+- If storing: Call `store_memory` with COMPREHENSIVE content including ALL file paths
+- If not storing: Respond "No storage needed - routine activity"
+- Extract MAXIMUM information when storing - don't summarize too much
+- Missing file paths or details = incomplete memory = lost context later
+
+Analyze the screen NOW and make your decision:"""
 
             # Start chat and get AI decision
             chat = model_with_tools.start_chat()
