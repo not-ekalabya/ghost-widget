@@ -13,6 +13,7 @@ import json
 import webbrowser
 import threading
 import time
+import base64
 from typing import Optional, Dict, Any
 from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -68,6 +69,27 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
 class FirebaseAuth:
     """Firebase Authentication Manager with Google Sign-In"""
 
+    @staticmethod
+    def _decode_jwt_payload(token: str) -> Dict[str, Any]:
+        """Decode JWT token to extract user info (without verification)"""
+        try:
+            # JWT format: header.payload.signature
+            parts = token.split('.')
+            if len(parts) != 3:
+                return {}
+
+            # Decode payload (add padding if needed)
+            payload = parts[1]
+            padding = len(payload) % 4
+            if padding:
+                payload += '=' * (4 - padding)
+
+            decoded = base64.urlsafe_b64decode(payload)
+            return json.loads(decoded)
+        except Exception as e:
+            print(f"Warning: Failed to decode JWT: {e}")
+            return {}
+
     def __init__(self, config: Optional[Dict[str, str]] = None, config_file: Optional[str] = None, persist_auth: bool = True):
         """
         Initialize Firebase Auth with configuration
@@ -101,7 +123,11 @@ class FirebaseAuth:
         self.current_user = None
         self.api_key = config['apiKey']
         self.persist_auth = persist_auth
-        self.auth_cache_file = Path.home() / ".ghost_widget_auth.json"
+        # Use local auth folder for token storage (like experiment.py)
+        self.auth_cache_file = Path("auth") / "firebase_token.json"
+
+        # Ensure auth directory exists
+        self.auth_cache_file.parent.mkdir(exist_ok=True)
 
         # Try to restore previous session
         if self.persist_auth:
@@ -281,7 +307,7 @@ class FirebaseAuth:
             return {"success": False, "message": f"Anonymous sign-in failed: {str(e)}"}
 
     def refresh_token(self, refresh_token: Optional[str] = None) -> Dict[str, Any]:
-        """Refresh authentication token"""
+        """Refresh authentication token using Firebase REST API (like experiment.py)"""
         try:
             if not refresh_token and self.current_user:
                 refresh_token = self.current_user.get('refreshToken')
@@ -289,34 +315,59 @@ class FirebaseAuth:
             if not refresh_token:
                 return {"success": False, "message": "No refresh token available"}
 
-            user = self.auth.refresh(refresh_token)
-
-            # Update current user with new token but preserve other data
-            if self.current_user:
-                self.current_user.update({
-                    "idToken": user['idToken'],
-                    "refreshToken": user['refreshToken'],
-                    "expiresIn": user.get('expiresIn', 3600),
-                    "token_issued_at": time.time()  # Mark when new token was issued
-                })
-            else:
-                self.current_user = {
-                    "idToken": user['idToken'],
-                    "refreshToken": user['refreshToken'],
-                    "userId": user.get('userId'),
-                    "expiresIn": user.get('expiresIn', 3600),
-                    "token_issued_at": time.time()  # Mark when new token was issued
-                }
-
-            # Save updated auth state
-            if self.persist_auth:
-                self._save_auth_state()
-
-            return {
-                "success": True,
-                "message": "Token refreshed successfully",
-                "user": self.current_user
+            # Use Firebase securetoken endpoint directly (more reliable than pyrebase)
+            url = f"https://securetoken.googleapis.com/v1/token?key={self.api_key}"
+            payload = {
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token
             }
+
+            response = requests.post(url, data=payload)
+            result = response.json()
+
+            if "id_token" in result:
+                # Decode JWT to extract user information
+                jwt_payload = self._decode_jwt_payload(result['id_token'])
+
+                # Update current user with new token but preserve other data
+                expires_in = int(result.get('expires_in', 3600))
+                if self.current_user:
+                    self.current_user.update({
+                        "idToken": result['id_token'],
+                        "refreshToken": result['refresh_token'],
+                        "expiresIn": expires_in,
+                        "token_issued_at": time.time()  # Mark when new token was issued
+                    })
+                    # Update user info from JWT if available
+                    if 'email' in jwt_payload:
+                        self.current_user['email'] = jwt_payload['email']
+                    if 'name' in jwt_payload:
+                        self.current_user['displayName'] = jwt_payload['name']
+                    if 'user_id' in jwt_payload:
+                        self.current_user['localId'] = jwt_payload['user_id']
+                else:
+                    self.current_user = {
+                        "idToken": result['id_token'],
+                        "refreshToken": result['refresh_token'],
+                        "userId": result.get('user_id'),
+                        "expiresIn": expires_in,
+                        "token_issued_at": time.time(),  # Mark when new token was issued
+                        "email": jwt_payload.get('email'),
+                        "displayName": jwt_payload.get('name'),
+                        "localId": jwt_payload.get('user_id')
+                    }
+
+                # Save updated auth state
+                if self.persist_auth:
+                    self._save_auth_state()
+
+                return {
+                    "success": True,
+                    "message": "Token refreshed successfully",
+                    "user": self.current_user
+                }
+            else:
+                return {"success": False, "message": f"Token refresh failed: {result.get('error', {}).get('message', 'Unknown error')}"}
         except Exception as e:
             return {"success": False, "message": f"Token refresh failed: {str(e)}"}
 
@@ -361,29 +412,30 @@ class FirebaseAuth:
         return None
 
     def _save_auth_state(self):
-        """Save authentication state to file for persistence"""
+        """Save authentication state to file for persistence (simplified like experiment.py)"""
         if not self.persist_auth or not self.current_user:
             return
 
         try:
-            # Store when the token was actually issued (for accurate expiration tracking)
-            if 'token_issued_at' not in self.current_user:
-                self.current_user['token_issued_at'] = time.time()
-
+            # Store just the essential tokens (like experiment.py)
             auth_data = {
-                "user": self.current_user,
+                "id": self.current_user.get('idToken'),
+                "refresh": self.current_user.get('refreshToken'),
+                "email": self.current_user.get('email'),
+                "displayName": self.current_user.get('displayName'),
+                "localId": self.current_user.get('localId'),
                 "saved_at": time.time()
             }
 
             with open(self.auth_cache_file, 'w') as f:
-                json.dump(auth_data, f)
+                json.dump(auth_data, f, indent=2)
 
-            print(f"✅ Authentication state saved")
+            print(f"✅ Authentication state saved to {self.auth_cache_file}")
         except Exception as e:
             print(f"⚠️ Failed to save auth state: {e}")
 
     def _load_auth_state(self) -> bool:
-        """Load and validate saved authentication state"""
+        """Load and validate saved authentication state (simplified like experiment.py)"""
         if not self.persist_auth or not self.auth_cache_file.exists():
             return False
 
@@ -391,47 +443,34 @@ class FirebaseAuth:
             with open(self.auth_cache_file, 'r') as f:
                 auth_data = json.load(f)
 
-            user_data = auth_data.get('user', {})
+            # Load tokens from simplified format
+            id_token = auth_data.get('id')
+            refresh_token = auth_data.get('refresh')
 
-            # Check if token is expired (tokens expire after 1 hour = 3600 seconds)
-            expires_in = int(user_data.get('expiresIn', 3600))
+            if not refresh_token:
+                print("❌ No refresh token found in saved auth")
+                self._clear_auth_state()
+                return False
 
-            # Use token_issued_at if available, otherwise fall back to saved_at
-            token_issued_at = float(user_data.get('token_issued_at', auth_data.get('saved_at', 0)))
-            time_elapsed = time.time() - token_issued_at
+            # Always try to refresh the token to ensure it's valid (like experiment.py auto_login)
+            print(f"🔄 Attempting to restore session using saved refresh token...")
+            result = self.refresh_token(refresh_token)
 
-            if time_elapsed < expires_in:
-                # Token is still valid
-                self.current_user = user_data
+            if result['success']:
+                # Restore additional user data if available
+                if 'email' in auth_data:
+                    self.current_user['email'] = auth_data['email']
+                if 'displayName' in auth_data:
+                    self.current_user['displayName'] = auth_data['displayName']
+                if 'localId' in auth_data:
+                    self.current_user['localId'] = auth_data['localId']
+
                 print(f"✅ Restored authentication session for {self.get_user_email()}")
                 return True
             else:
-                # Token expired, try to refresh
-                print(f"🔄 Auth token expired ({int(time_elapsed/60)} minutes old), attempting to refresh...")
-                refresh_token = user_data.get('refreshToken')
-
-                if refresh_token:
-                    # Try to refresh with retry logic (up to 3 attempts)
-                    max_retries = 3
-                    for attempt in range(1, max_retries + 1):
-                        result = self.refresh_token(refresh_token)
-                        if result['success']:
-                            print(f"✅ Successfully refreshed auth token (attempt {attempt}/{max_retries})")
-                            return True
-                        else:
-                            print(f"⚠️ Token refresh attempt {attempt}/{max_retries} failed: {result['message']}")
-                            if attempt < max_retries:
-                                print(f"🔄 Retrying in 2 seconds...")
-                                time.sleep(2)
-
-                    # All retry attempts failed
-                    print("❌ Token refresh failed after all retries. Please sign in again.")
-                    self._clear_auth_state()
-                    return False
-                else:
-                    print("❌ No refresh token available")
-                    self._clear_auth_state()
-                    return False
+                print(f"❌ Failed to restore session: {result['message']}")
+                self._clear_auth_state()
+                return False
 
         except Exception as e:
             print(f"⚠️ Failed to load auth state: {e}")
