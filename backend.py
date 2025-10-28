@@ -51,7 +51,7 @@ except ImportError:
     print("Warning: GitHub integration not available. Install with: pip install PyGithub")
 
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=10, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini", recording_fps=1, analysis_interval=10):
+    def __init__(self, api_key, capture_interval=10, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini", recording_fps=1, analysis_interval=40):
         """
         Initialize the background companion with RAG support and autonomous content generation
 
@@ -72,7 +72,7 @@ class BackgroundCompanion:
             analysis_interval: Seconds between video analysis (default: 10)
         """
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.0-flash-lite')
+        self.model = genai.GenerativeModel('gemini-flash-lite-latest')
         self.api_key = api_key
         self.capture_interval = analysis_interval if analysis_interval else capture_interval  # Backward compatibility
         self.analysis_interval = analysis_interval if analysis_interval else capture_interval
@@ -747,7 +747,7 @@ class BackgroundCompanion:
 
             # Create model with tools for video analysis
             model_with_tools = genai.GenerativeModel(
-                'gemini-2.0-flash-lite',
+                'gemini-flash-lite-latest',
                 tools=self.tools
             )
 
@@ -2642,7 +2642,7 @@ Be detailed and informative."""
 
             # Create model with ALL tools (including file reading)
             model_with_tools = genai.GenerativeModel(
-                'gemini-2.0-flash-exp',
+                'gemini-flash-lite-latest',
                 tools=self.tools  # This includes file reading, store_memory, and all other tools
             )
 
@@ -3156,7 +3156,7 @@ Analyze the screen NOW and make your decision:"""
         # We'll use the traditional model with function calling for file operations
         try:
             model_with_tools = genai.GenerativeModel(
-                'gemini-flash-latest',
+                'gemini-2.5-pro',
                 tools=self.tools
             )
         except Exception as e:
