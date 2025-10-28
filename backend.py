@@ -14,6 +14,8 @@ from typing import List, Dict, Any
 import io
 import numpy as np
 import pyperclip  # For clipboard operations
+import cv2  # OpenCV for video encoding
+import mss  # Fast screen capture
 
 # Mem0 integration
 try:
@@ -48,13 +50,13 @@ except ImportError:
     print("Warning: GitHub integration not available. Install with: pip install PyGithub")
 
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=10, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini"):
+    def __init__(self, api_key, capture_interval=10, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini", recording_fps=1, analysis_interval=10):
         """
         Initialize the background companion with RAG support and autonomous content generation
 
         Args:
             api_key: Google Gemini API key
-            capture_interval: Seconds between screenshots (default: 10)
+            capture_interval: DEPRECATED - use analysis_interval instead
             db_path: Path to SQLite database
             watch_dirs: List of directories to watch for file context
             always_recent: Number of most recent contexts to always include (default: 3)
@@ -65,14 +67,20 @@ class BackgroundCompanion:
             progress_callback: Callback function for progress updates (for GUI)
             qa_model: Model to use for question answering - "claude" or "gemini" (default: "gemini")
                      Note: Screenshot analysis always uses Gemini regardless of this setting
+            recording_fps: Frames per second for video recording (default: 1)
+            analysis_interval: Seconds between video analysis (default: 10)
         """
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self.model = genai.GenerativeModel('gemini-2.0-flash-lite')
         self.api_key = api_key
-        self.capture_interval = capture_interval
+        self.capture_interval = analysis_interval if analysis_interval else capture_interval  # Backward compatibility
+        self.analysis_interval = analysis_interval if analysis_interval else capture_interval
+        self.recording_fps = recording_fps
         self.db_path = db_path
         self.running = False
-        self.screenshot_dir = Path("screenshots")
+        self.video_dir = Path("recordings")
+        self.video_dir.mkdir(exist_ok=True)
+        self.screenshot_dir = Path("screenshots")  # Keep for backward compatibility
         self.screenshot_dir.mkdir(exist_ok=True)
         self.watch_dirs = watch_dirs or []
         self.always_recent = always_recent
@@ -83,6 +91,12 @@ class BackgroundCompanion:
         self.progress_callback = progress_callback  # For GUI progress updates
         self.user_id = user_id  # Store user_id for per-user memory separation
         self.qa_model = qa_model.lower()  # Store preferred QA model ("claude" or "gemini")
+
+        # Video recording state
+        self.video_writer = None
+        self.current_video_path = None
+        self.video_start_time = None
+        self.screen_size = None  # Will be set on first recording
 
         # Initialize Mem0 Platform with API key
         self.use_mem0 = MEM0_AVAILABLE
@@ -597,10 +611,10 @@ class BackgroundCompanion:
         return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
     
     def _capture_screenshot(self):
-        """Capture current screenshot"""
+        """Capture current screenshot (kept for backward compatibility)"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         screenshot_path = self.screenshot_dir / f"screen_{timestamp}.png"
-        
+
         try:
             screenshot = ImageGrab.grab()
             screenshot.save(screenshot_path)
@@ -608,6 +622,235 @@ class BackgroundCompanion:
         except Exception as e:
             print(f"Error capturing screenshot: {e}")
             return None
+
+    def _start_video_recording(self):
+        """Start recording a new video chunk"""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.current_video_path = self.video_dir / f"recording_{timestamp}.mp4"
+
+            # Get screen dimensions using a fresh mss instance
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]  # Primary monitor
+                width = monitor["width"]
+                height = monitor["height"]
+                self.screen_size = (width, height)
+
+            # Initialize video writer with H264 codec
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            self.video_writer = cv2.VideoWriter(
+                str(self.current_video_path),
+                fourcc,
+                self.recording_fps,
+                self.screen_size
+            )
+
+            self.video_start_time = time.time()
+            return True
+
+        except Exception as e:
+            print(f"Error starting video recording: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _capture_frame(self):
+        """Capture a single frame and add it to the video"""
+        try:
+            if not self.video_writer:
+                return False
+
+            # Capture screen using mss (faster than PIL) - create fresh instance each time
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]  # Primary monitor
+                screenshot = sct.grab(monitor)
+
+                # Convert to numpy array and then to BGR for OpenCV
+                frame = np.array(screenshot)
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+                # Write frame to video
+                self.video_writer.write(frame)
+
+            return True
+
+        except Exception as e:
+            print(f"Error capturing frame: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _stop_video_recording(self):
+        """Stop recording and return the video path"""
+        try:
+            if self.video_writer:
+                self.video_writer.release()
+                self.video_writer = None
+
+            video_path = self.current_video_path
+            self.current_video_path = None
+            self.video_start_time = None
+
+            return str(video_path) if video_path else None
+
+        except Exception as e:
+            print(f"Error stopping video recording: {e}")
+            return None
+
+    def _analyze_video_with_gemini(self, video_path, active_context):
+        """
+        Analyze a video recording using Gemini Flash with vision capabilities.
+        Uses Gemini's native video understanding to analyze the recording.
+        """
+        try:
+            print(f"   📹 Uploading video to Gemini...")
+
+            # Upload video file to Gemini Files API
+            video_file = genai.upload_file(path=video_path)
+
+            # Wait for processing to complete
+            print(f"   ⏳ Processing video...")
+            while video_file.state.name == "PROCESSING":
+                time.sleep(2)
+                video_file = genai.get_file(video_file.name)
+
+            if video_file.state.name == "FAILED":
+                raise ValueError(f"Video processing failed: {video_file.state.name}")
+
+            print(f"   ✅ Video processed successfully")
+
+            # Format context information
+            file_list = active_context['files'][:10] if active_context['files'] else []
+            file_info = '\n'.join([f"  - {f}" for f in file_list]) if file_list else "  None"
+            apps_info = ', '.join(active_context['applications'][:10]) if active_context['applications'] else 'None'
+
+            # Get existing related memories
+            print("   🔍 Searching for related memories...")
+            related_memories = self._get_related_memories_for_context(active_context, limit=5)
+
+            existing_memories_str = ""
+            if related_memories:
+                print(f"   📚 Found {len(related_memories)} related memories")
+                existing_memories_str = "\n**EXISTING RELATED MEMORIES (Build upon this knowledge):**\n"
+                for idx, mem in enumerate(related_memories[:5], 1):
+                    memory_text = mem.get('memory', '')
+                    created_at = mem.get('created_at', '')
+                    existing_memories_str += f"\n{idx}. [{created_at}] {memory_text[:200]}...\n"
+            else:
+                print("   📚 No related memories found - creating fresh context")
+
+            # Create model with tools for video analysis
+            model_with_tools = genai.GenerativeModel(
+                'gemini-2.0-flash-lite',
+                tools=self.tools
+            )
+
+            prompt = f"""You are an advanced AI memory system analyzing the user's screen recording. Your job is to perform a COMPREHENSIVE analysis of this video and determine if it contains information worth storing as a long-term memory.
+
+**Recording Duration:** Approximately {self.analysis_interval} seconds
+**Active Applications:** {apps_info}
+
+**Recently Accessed Files:**
+{file_info}
+{existing_memories_str}
+
+**VIDEO ANALYSIS INSTRUCTIONS:**
+
+Analyze this screen recording and extract meaningful information. Videos provide BETTER CONTEXT than static screenshots because you can see:
+- Workflow patterns and sequences of actions
+- Code being written or edited over time
+- Error resolution processes
+- Navigation patterns through applications
+- Continuous changes in content
+
+**CRITICAL: PROJECT-SPECIFIC ANALYSIS**
+
+The user works on MULTIPLE DIFFERENT PROJECTS. Your memories must be PROJECT-SPECIFIC, not generic!
+
+❌ BAD: "User project path is C:\\Projects\\app"
+❌ BAD: "Working on Python code"
+✅ GOOD: "ghost-widget project: PyQt6 desktop app for AI screen capture. Implementing video recording feature in backend.py using opencv and mss library at 1 FPS."
+
+**PROJECT IDENTIFICATION REQUIREMENTS:**
+1. Extract project name from paths visible in video
+2. Identify project type (web app, desktop app, API, etc.)
+3. Note key technologies/frameworks used
+4. Describe SPECIFIC work being done (which file, which function, what problem)
+5. Track changes over time in the video
+
+**YOU HAVE TOOLS - USE THEM BEFORE STORING!**
+
+Available tools:
+- `read_file_as_text`: Read code files to understand project structure and content
+- `list_directory`: Explore project directories
+- `get_file_info`: Get file metadata
+- All other file system tools
+
+**WHEN TO STORE MEMORIES:**
+Store if the video shows:
+1. Active code work (writing, editing, debugging)
+2. Learning new concepts (documentation, tutorials)
+3. Problem-solving (errors, debugging, testing)
+4. Configuration/setup work
+5. File/project structure visible
+6. Meaningful workflow patterns
+
+**WHEN NOT TO STORE:**
+Skip if the video shows:
+- Idle/blank screen
+- Just browsing (no active work)
+- Entertainment/social media
+- Generic desktop with no meaningful activity
+
+**STORAGE FORMAT:**
+Use the `store_memory` tool with:
+- **memory**: Detailed, project-specific description
+- **metadata**: {{"category": "code|learning|debugging|config", "project": "project-name", "files": ["file1", "file2"]}}
+
+Now analyze this video and decide whether to store memory."""
+
+            # Analyze video with Gemini
+            response = model_with_tools.generate_content([video_file, prompt])
+
+            # Handle tool calls (store_memory, file operations, etc.)
+            if response.candidates[0].content.parts:
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, 'function_call') and part.function_call:
+                        function_name = part.function_call.name
+                        function_args = dict(part.function_call.args)
+
+                        print(f"   🔧 AI calling tool: {function_name}")
+
+                        # Execute the tool call
+                        if function_name == "store_memory":
+                            # Call store_memory function
+                            result = self.store_memory(**function_args)
+                            print(f"   ✅ Memory stored: {function_args.get('memory', '')[:100]}...")
+                        else:
+                            # Handle other tool calls
+                            tool_function = getattr(self, function_name, None)
+                            if tool_function:
+                                result = tool_function(**function_args)
+                    elif hasattr(part, 'text') and part.text:
+                        print(f"   💭 AI: {part.text[:150]}...")
+
+            # Clean up - delete video file from Gemini Files API
+            try:
+                genai.delete_file(video_file.name)
+            except Exception as e:
+                print(f"   ⚠️ Could not delete video file from Gemini: {e}")
+
+            # Clean up local video file to save space
+            try:
+                Path(video_path).unlink()
+                print(f"   🗑️ Local video deleted to save space")
+            except Exception as e:
+                print(f"   ⚠️ Could not delete local video: {e}")
+
+        except Exception as e:
+            print(f"   ❌ Error analyzing video: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _get_active_context(self):
         """Get active applications and open files"""
@@ -2641,9 +2884,10 @@ Analyze the screen NOW and make your decision:"""
             return False
 
     def _capture_loop(self):
-        """Main capture loop with AI-driven storage decisions"""
-        print(f"🧠 AI-Driven Memory System Started")
-        print(f"   Analyzing screen every {self.capture_interval} seconds")
+        """Main capture loop with video recording and AI-driven storage decisions"""
+        print(f"🧠 AI-Driven Memory System Started (Video Recording Mode)")
+        print(f"   Recording at {self.recording_fps} FPS")
+        print(f"   Analyzing video every {self.analysis_interval} seconds")
         print(f"   AI will decide what's worth storing")
         print(f"   Watching directories: {self.watch_dirs}")
         if self.autonomous_mode:
@@ -2658,30 +2902,57 @@ Analyze the screen NOW and make your decision:"""
             try:
                 iteration_count += 1
                 timestamp = datetime.now().strftime("%H:%M:%S")
-                print(f"\n[{timestamp}] 📸 Capture #{iteration_count}")
+                print(f"\n[{timestamp}] 🎥 Recording #{iteration_count}")
 
                 # Get active context (apps, files)
                 active_context = self._get_active_context()
 
-                # Capture screenshot
-                screenshot_path = self._capture_screenshot()
+                # Start video recording
+                if self._start_video_recording():
+                    print(f"   📹 Recording started at {self.recording_fps} FPS for {self.analysis_interval} seconds...")
 
-                if screenshot_path:
-                    # AI-driven analysis and storage decision (vision only)
-                    print(f"   🧠 AI analyzing content with vision...")
-                    self._ai_analyze_and_store(screenshot_path, active_context)
+                    # Calculate frame interval based on FPS
+                    frame_interval = 1.0 / self.recording_fps
+                    recording_duration = self.analysis_interval
 
-                    # Autonomous content generation (if enabled)
-                    if self.autonomous_mode:
-                        current_time = time.time()
-                        if current_time - self.last_autonomous_check >= self.autonomous_interval:
-                            print("\n🤖 Generating autonomous content...")
-                            self._generate_autonomous_content()
-                            self.last_autonomous_check = current_time
+                    # Record frames for the specified duration
+                    start_time = time.time()
+                    frame_count = 0
 
-                # Wait for next capture
-                print(f"   ⏳ Waiting {self.capture_interval} seconds until next check...")
-                time.sleep(self.capture_interval)
+                    while time.time() - start_time < recording_duration and self.running:
+                        frame_start = time.time()
+
+                        # Capture and write frame
+                        if self._capture_frame():
+                            frame_count += 1
+
+                        # Sleep to maintain desired FPS
+                        elapsed = time.time() - frame_start
+                        sleep_time = max(0, frame_interval - elapsed)
+                        time.sleep(sleep_time)
+
+                    print(f"   ✅ Recording complete: {frame_count} frames captured")
+
+                    # Stop recording and get video path
+                    video_path = self._stop_video_recording()
+
+                    if video_path:
+                        # AI-driven video analysis and storage decision
+                        print(f"   🧠 AI analyzing video with Gemini Flash Lite...")
+                        self._analyze_video_with_gemini(video_path, active_context)
+
+                        # Autonomous content generation (if enabled)
+                        if self.autonomous_mode:
+                            current_time = time.time()
+                            if current_time - self.last_autonomous_check >= self.autonomous_interval:
+                                print("\n🤖 Generating autonomous content...")
+                                self._generate_autonomous_content()
+                                self.last_autonomous_check = current_time
+                    else:
+                        print(f"   ❌ Failed to save video recording")
+                else:
+                    print(f"   ❌ Failed to start video recording")
+                    time.sleep(5)  # Wait before retrying
 
             except Exception as e:
                 print(f"Error in capture loop: {e}")
@@ -2707,8 +2978,18 @@ Analyze the screen NOW and make your decision:"""
             self.stop()
     
     def stop(self):
-        """Stop background capturing"""
+        """Stop background capturing and cleanup resources"""
         self.running = False
+
+        # Clean up video recording resources
+        if self.video_writer:
+            try:
+                self.video_writer.release()
+                self.video_writer = None
+                print("Video writer released.")
+            except Exception as e:
+                print(f"Error releasing video writer: {e}")
+
         if hasattr(self, 'thread'):
             self.thread.join(timeout=5)
         print("Stopped.")
@@ -3883,7 +4164,11 @@ def main():
     parser.add_argument('--user-id', type=str, default='default_user',
                        help='User ID for per-user memory separation (default: default_user)')
     parser.add_argument('--interval', type=int, default=10,
-                       help='Capture interval in seconds (default: 10)')
+                       help='DEPRECATED: Use --analysis-interval instead. Capture interval in seconds (default: 10)')
+    parser.add_argument('--fps', type=int, default=1,
+                       help='Video recording frames per second (default: 1)')
+    parser.add_argument('--analysis-interval', type=int, default=10,
+                       help='Video analysis interval in seconds (default: 10)')
     parser.add_argument('--watch-dirs', nargs='+',
                        help='Directories to watch for file context (e.g., ~/Documents ~/Projects)')
     parser.add_argument('--question', help='Question to ask (for query mode)')
@@ -3905,7 +4190,9 @@ def main():
 
     companion = BackgroundCompanion(
         api_key=args.api_key,
-        capture_interval=args.interval,
+        capture_interval=args.interval,  # Kept for backward compatibility
+        recording_fps=args.fps,
+        analysis_interval=args.analysis_interval,
         watch_dirs=watch_dirs,
         always_recent=args.always_recent,
         autonomous_mode=(args.mode == 'autonomous'),

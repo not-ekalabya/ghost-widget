@@ -257,7 +257,9 @@ class CompanionRunner(threading.Thread):
         # Pass directly to the class
         kwargs = {
             "api_key": HARD_CODED_API_KEY,
-            "capture_interval": self.config.get("interval", 10),
+            "capture_interval": self.config.get("interval", 10),  # Kept for backward compatibility
+            "recording_fps": self.config.get("fps", 1),
+            "analysis_interval": self.config.get("analysis_interval", 10),
             "watch_dirs": self.config.get("watch_dirs", []),
             "always_recent": self.config.get("always_recent", 3),
             "user_id": user_id,
@@ -724,23 +726,43 @@ class OverlayWindow(QWidget):
         user_id_h.addStretch()
         settings_layout.addLayout(user_id_h)
 
-        # Interval spinner with modern styling
+        # Analysis Interval spinner with modern styling (renamed from Capture Interval)
         interval_h = QHBoxLayout()
         interval_h.setSpacing(16)
-        interval_label = QLabel("Capture Interval")
+        interval_label = QLabel("Analysis Interval")
         interval_label.setObjectName("fieldLabel")
+        interval_label.setToolTip("How often to analyze the recorded video (in seconds)")
         interval_h.addWidget(interval_label)
 
         self.interval_spin = QSpinBox()
         self.interval_spin.setObjectName("modernSpinBox")
         self.interval_spin.setRange(1, 86400)
-        self.interval_spin.setValue(int(self.config.get("interval", 10)))
+        self.interval_spin.setValue(int(self.config.get("analysis_interval", self.config.get("interval", 10))))
         self.interval_spin.setSuffix(" sec")
         self.interval_spin.setFixedHeight(38)
         self.interval_spin.setFixedWidth(125)
         interval_h.addWidget(self.interval_spin)
         interval_h.addStretch()
         settings_layout.addLayout(interval_h)
+
+        # FPS spinner with modern styling
+        fps_h = QHBoxLayout()
+        fps_h.setSpacing(16)
+        fps_label = QLabel("Recording FPS")
+        fps_label.setObjectName("fieldLabel")
+        fps_label.setToolTip("Frames per second for video recording (lower = less cost)")
+        fps_h.addWidget(fps_label)
+
+        self.fps_spin = QSpinBox()
+        self.fps_spin.setObjectName("modernSpinBox")
+        self.fps_spin.setRange(1, 30)
+        self.fps_spin.setValue(int(self.config.get("fps", 1)))
+        self.fps_spin.setSuffix(" FPS")
+        self.fps_spin.setFixedHeight(38)
+        self.fps_spin.setFixedWidth(125)
+        fps_h.addWidget(self.fps_spin)
+        fps_h.addStretch()
+        settings_layout.addLayout(fps_h)
 
         # QA Model selection with modern styling
         qa_model_h = QHBoxLayout()
@@ -1469,7 +1491,9 @@ class OverlayWindow(QWidget):
         return {
             "api_key": "",  # API key is hardcoded, not editable
             "user_id": self.user_id_display.text().strip() or "default_user",
-            "interval": int(self.interval_spin.value()),
+            "interval": int(self.interval_spin.value()),  # Kept for backward compatibility
+            "analysis_interval": int(self.interval_spin.value()),
+            "fps": int(self.fps_spin.value()),
             "watch_dirs": watch_dirs,
             "always_recent": self.config.get("always_recent", 3),
             "qa_model": self.qa_model_combo.currentData()
