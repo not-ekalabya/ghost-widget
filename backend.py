@@ -16,6 +16,7 @@ import numpy as np
 import pyperclip  # For clipboard operations
 import cv2  # OpenCV for video encoding
 import mss  # Fast screen capture
+from queue import Queue, Empty  # For parallel video analysis
 
 # Mem0 integration
 try:
@@ -97,6 +98,11 @@ class BackgroundCompanion:
         self.current_video_path = None
         self.video_start_time = None
         self.screen_size = None  # Will be set on first recording
+
+        # Parallel video analysis queue and worker thread
+        self.analysis_queue = Queue(maxsize=5)  # Limit queue to prevent memory issues
+        self.analysis_thread = None
+        self.analysis_running = False
 
         # Initialize Mem0 Platform with API key
         self.use_mem0 = MEM0_AVAILABLE
@@ -851,7 +857,36 @@ Now analyze this video and decide whether to store memory."""
             print(f"   ❌ Error analyzing video: {e}")
             import traceback
             traceback.print_exc()
-    
+
+    def _video_analysis_worker(self):
+        """Background worker thread that processes videos from the queue"""
+        print("🔄 Video analysis worker thread started")
+
+        while self.analysis_running:
+            try:
+                # Get video from queue with timeout to allow checking analysis_running flag
+                try:
+                    video_path, active_context = self.analysis_queue.get(timeout=1.0)
+                except Empty:
+                    continue
+
+                if video_path is None:  # Sentinel value to stop the worker
+                    break
+
+                # Process the video
+                print(f"\n   🧠 [Background] Analyzing video: {Path(video_path).name}")
+                self._analyze_video_with_gemini(video_path, active_context)
+
+                # Mark task as done
+                self.analysis_queue.task_done()
+
+            except Exception as e:
+                print(f"   ❌ Error in analysis worker: {e}")
+                import traceback
+                traceback.print_exc()
+
+        print("🛑 Video analysis worker thread stopped")
+
     def _get_active_context(self):
         """Get active applications and open files"""
         context = {
@@ -2889,12 +2924,18 @@ Analyze the screen NOW and make your decision:"""
         print(f"   Recording at {self.recording_fps} FPS")
         print(f"   Analyzing video every {self.analysis_interval} seconds")
         print(f"   AI will decide what's worth storing")
+        print(f"   Parallel processing: Recording continues while AI analyzes")
         print(f"   Watching directories: {self.watch_dirs}")
         if self.autonomous_mode:
             print(f"🤖 AUTONOMOUS MODE ENABLED - Generating content every {self.autonomous_interval} seconds")
             print(f"📝 Content will be written to: {self.autonomous_output}")
             print(f"📋 Content will be automatically copied to clipboard")
         print("Press Ctrl+C to stop.\n")
+
+        # Start the background analysis worker thread
+        self.analysis_running = True
+        self.analysis_thread = threading.Thread(target=self._video_analysis_worker, daemon=True)
+        self.analysis_thread.start()
 
         iteration_count = 0
 
@@ -2937,9 +2978,22 @@ Analyze the screen NOW and make your decision:"""
                     video_path = self._stop_video_recording()
 
                     if video_path:
-                        # AI-driven video analysis and storage decision
-                        print(f"   🧠 AI analyzing video with Gemini Flash Lite...")
-                        self._analyze_video_with_gemini(video_path, active_context)
+                        # Queue video for background analysis (non-blocking)
+                        try:
+                            # Check queue size
+                            queue_size = self.analysis_queue.qsize()
+                            if queue_size > 0:
+                                print(f"   📊 Analysis queue: {queue_size} video(s) waiting")
+
+                            # Add to queue (will wait if queue is full)
+                            self.analysis_queue.put((video_path, active_context), timeout=2.0)
+                            print(f"   ✅ Video queued for analysis (continuing recording...)")
+
+                        except Exception as e:
+                            print(f"   ⚠️ Failed to queue video for analysis: {e}")
+                            # If queue is full or error, analyze synchronously as fallback
+                            print(f"   🧠 Falling back to synchronous analysis...")
+                            self._analyze_video_with_gemini(video_path, active_context)
 
                         # Autonomous content generation (if enabled)
                         if self.autonomous_mode:
@@ -2980,6 +3034,25 @@ Analyze the screen NOW and make your decision:"""
     def stop(self):
         """Stop background capturing and cleanup resources"""
         self.running = False
+
+        # Stop the analysis worker thread
+        if self.analysis_running:
+            print("Stopping analysis worker thread...")
+            self.analysis_running = False
+
+            # Send sentinel value to unblock the worker if it's waiting
+            try:
+                self.analysis_queue.put((None, None), timeout=1.0)
+            except:
+                pass
+
+            # Wait for analysis thread to finish
+            if self.analysis_thread and self.analysis_thread.is_alive():
+                print("Waiting for pending video analysis to complete...")
+                self.analysis_thread.join(timeout=10)
+
+                if self.analysis_thread.is_alive():
+                    print("⚠️ Analysis thread did not stop gracefully")
 
         # Clean up video recording resources
         if self.video_writer:
