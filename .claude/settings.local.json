@@ -12,7 +12,8 @@
       "Bash(python -m py_compile:*)",
       "Bash(python:*)",
       "Bash(sed:*)",
-      "WebFetch(domain:ai.google.dev)"
+      "WebFetch(domain:ai.google.dev)",
+      "WebFetch(domain:mem0.ai)"
     ],
     "deny": [],
     "ask": []
