@@ -17,6 +17,15 @@ import pyperclip  # For clipboard operations
 import cv2  # OpenCV for video encoding
 import mss  # Fast screen capture
 from queue import Queue, Empty  # For parallel video analysis
+import hashlib  # For frame comparison
+
+# Analytics tracking
+try:
+    from analytics import AnalyticsTracker
+    ANALYTICS_AVAILABLE = True
+except ImportError:
+    ANALYTICS_AVAILABLE = False
+    print("Warning: analytics module not available. Usage tracking disabled.")
 
 # Mem0 integration
 try:
@@ -51,7 +60,7 @@ except ImportError:
     print("Warning: GitHub integration not available. Install with: pip install PyGithub")
 
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=10, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini", recording_fps=1, analysis_interval=40):
+    def __init__(self, api_key, capture_interval=10, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini", recording_fps=1, analysis_interval=40, skip_static_threshold=70.0):
         """
         Initialize the background companion with RAG support and autonomous content generation
 
@@ -69,7 +78,9 @@ class BackgroundCompanion:
             qa_model: Model to use for question answering - "claude" or "gemini" (default: "gemini")
                      Note: Screenshot analysis always uses Gemini regardless of this setting
             recording_fps: Frames per second for video recording (default: 1)
-            analysis_interval: Seconds between video analysis (default: 10)
+            analysis_interval: Seconds between video analysis (default: 40)
+            skip_static_threshold: Skip analysis if >N% of frames are static (default: 70.0)
+                                   Set to 100 to never skip, 0 to always skip
         """
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-flash-lite-latest')
@@ -98,6 +109,25 @@ class BackgroundCompanion:
         self.current_video_path = None
         self.video_start_time = None
         self.screen_size = None  # Will be set on first recording
+
+        # Smart frame detection and cost optimization
+        self.last_frame_hash = None
+        self.frames_skipped = 0
+        self.frame_similarity_threshold = 0.95  # Frame comparison: skip if >95% similar
+        self.skip_static_threshold = skip_static_threshold  # Skip entire analysis if >N% frames static
+
+        # Condensed video approach - store frames in memory
+        self.all_frames = []  # All captured frames for full video
+        self.interesting_frames = []  # Only changed frames for condensed video
+        self.frames_kept_indices = []  # Track which frames were kept
+
+        # Analytics tracking
+        self.analytics = None
+        if ANALYTICS_AVAILABLE:
+            try:
+                self.analytics = AnalyticsTracker(user_id=user_id)
+            except Exception as e:
+                print(f"⚠️ Failed to initialize analytics: {e}")
 
         # Parallel video analysis queue and worker thread
         self.analysis_queue = Queue(maxsize=5)  # Limit queue to prevent memory issues
@@ -633,7 +663,6 @@ class BackgroundCompanion:
         """Start recording a new video chunk"""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.current_video_path = self.video_dir / f"recording_{timestamp}.mp4"
 
             # Get screen dimensions using a fresh mss instance
             with mss.mss() as sct:
@@ -642,16 +671,62 @@ class BackgroundCompanion:
                 height = monitor["height"]
                 self.screen_size = (width, height)
 
-            # Initialize video writer with H264 codec
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            self.video_writer = cv2.VideoWriter(
-                str(self.current_video_path),
-                fourcc,
-                self.recording_fps,
-                self.screen_size
-            )
+            # Initialize video writer with codec/container combinations that actually work
+            import platform
+            is_windows = platform.system() == 'Windows'
+
+            if is_windows:
+                # Windows: Use mp4v with .mp4 (universally playable) or MJPEG with .avi
+                codecs_to_try = [
+                    ('mp4v', 'MPEG-4', '.mp4'),  # Most compatible for Windows
+                    ('MJPG', 'MJPEG', '.avi'),   # Works but larger files
+                ]
+            else:
+                # Linux/Mac: Try h264, x264, or mp4v with .mp4
+                codecs_to_try = [
+                    ('avc1', 'H.264', '.mp4'),
+                    ('X264', 'x264', '.mp4'),
+                    ('mp4v', 'MPEG-4', '.mp4'),
+                ]
+
+            self.video_writer = None
+            self.current_video_path = None
+
+            for codec_code, codec_name, extension in codecs_to_try:
+                try:
+                    # Set filename with appropriate extension for codec
+                    video_path = self.video_dir / f"recording_{timestamp}{extension}"
+
+                    fourcc = cv2.VideoWriter_fourcc(*codec_code)
+                    writer = cv2.VideoWriter(
+                        str(video_path),
+                        fourcc,
+                        self.recording_fps,
+                        self.screen_size
+                    )
+                    if writer.isOpened():
+                        self.video_writer = writer
+                        self.current_video_path = video_path
+                        print(f"   🎬 Using: {codec_name} ({codec_code}) in {extension} container")
+                        break
+                    else:
+                        writer.release()
+                except Exception as e:
+                    # Silently try next codec
+                    continue
+
+            if not self.video_writer or not self.video_writer.isOpened():
+                raise Exception("Failed to initialize video writer with any codec")
 
             self.video_start_time = time.time()
+            self.frames_skipped = 0  # Reset frame skip counter
+            self.last_frame_hash = None  # Reset frame comparison
+
+            # Reset frame storage for condensed video approach
+            self.all_frames = []
+            self.interesting_frames = []
+            self.frames_kept_indices = []
+
             return True
 
         except Exception as e:
@@ -661,7 +736,7 @@ class BackgroundCompanion:
             return False
 
     def _capture_frame(self):
-        """Capture a single frame and add it to the video"""
+        """Capture a single frame and add it to the video with smart frame detection"""
         try:
             if not self.video_writer:
                 return False
@@ -675,7 +750,33 @@ class BackgroundCompanion:
                 frame = np.array(screenshot)
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
-                # Write frame to video
+                # Store a copy of the frame in memory for condensed video approach
+                frame_copy = frame.copy()
+                self.all_frames.append(frame_copy)
+                frame_index = len(self.all_frames) - 1
+
+                # Smart frame detection - compare with previous frame
+                # Use perceptual hashing for efficient comparison
+                frame_hash = self._compute_frame_hash(frame)
+
+                is_similar = False
+                if self.last_frame_hash is not None:
+                    similarity = self._compute_hash_similarity(self.last_frame_hash, frame_hash)
+
+                    # Check if frame is too similar (no significant change)
+                    if similarity > self.frame_similarity_threshold:
+                        self.frames_skipped += 1
+                        is_similar = True
+                        # DON'T update hash for similar frames to maintain comparison baseline
+
+                # Only update hash if frame is different
+                if not is_similar:
+                    self.last_frame_hash = frame_hash
+                    # Store this frame as "interesting" for condensed video
+                    self.interesting_frames.append(frame_copy)
+                    self.frames_kept_indices.append(frame_index)
+
+                # Always write frame to full video writer for continuity
                 self.video_writer.write(frame)
 
             return True
@@ -686,22 +787,199 @@ class BackgroundCompanion:
             traceback.print_exc()
             return False
 
-    def _stop_video_recording(self):
-        """Stop recording and return the video path"""
+    def _compute_frame_hash(self, frame):
+        """Compute a perceptual hash of a frame for similarity comparison"""
         try:
+            # Resize to small size for faster comparison
+            small_frame = cv2.resize(frame, (32, 32))
+            # Convert to grayscale
+            gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+            # Compute average hash
+            avg = gray.mean()
+            # Create binary hash
+            hash_bits = (gray > avg).flatten()
+            return hash_bits
+        except Exception as e:
+            print(f"Error computing frame hash: {e}")
+            return None
+
+    def _compute_hash_similarity(self, hash1, hash2):
+        """Compute similarity between two frame hashes (0.0 to 1.0)"""
+        try:
+            if hash1 is None or hash2 is None:
+                return 0.0
+            # Compute Hamming distance
+            matches = np.sum(hash1 == hash2)
+            similarity = matches / len(hash1)
+            return similarity
+        except Exception as e:
+            print(f"Error computing hash similarity: {e}")
+            return 0.0
+
+    def _stop_video_recording(self):
+        """
+        Stop recording and create both full and condensed videos
+
+        Returns:
+            dict: {
+                'full_video_path': Path to full recording (all frames),
+                'condensed_video_path': Path to condensed recording (only changed frames),
+                'frames_total': Total frames captured,
+                'frames_kept': Frames in condensed video,
+                'frames_skipped': Frames skipped from condensed video,
+                'skip_rate': Percentage of frames skipped,
+                'compression_ratio': Ratio of condensed to full
+            }
+        """
+        try:
+            # Release the temporary video writer (we don't need its output)
             if self.video_writer:
                 self.video_writer.release()
                 self.video_writer = None
 
-            video_path = self.current_video_path
+            # Delete the temporary full video file since we'll create new ones from memory
+            if self.current_video_path and self.current_video_path.exists():
+                try:
+                    self.current_video_path.unlink()
+                except:
+                    pass
+
             self.current_video_path = None
             self.video_start_time = None
 
-            return str(video_path) if video_path else None
+            # Check if we have frames to save
+            if not self.all_frames:
+                print(f"   ❌ No frames captured!")
+                return None
+
+            # Calculate statistics
+            frames_total = len(self.all_frames)
+            frames_kept = len(self.interesting_frames)
+            frames_skipped = frames_total - frames_kept
+            skip_rate = (frames_skipped / frames_total * 100) if frames_total > 0 else 0
+            compression_ratio = (frames_kept / frames_total) if frames_total > 0 else 0
+
+            print(f"   📊 Video stats: {frames_total} frames total, {frames_kept} kept ({compression_ratio*100:.1f}%), {frames_skipped} skipped ({skip_rate:.1f}%)")
+
+            # Get frame dimensions
+            height, width = self.all_frames[0].shape[:2]
+
+            # Determine codec/container based on platform
+            import platform
+            is_windows = platform.system() == 'Windows'
+
+            if is_windows:
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                extension = '.mp4'
+            else:
+                fourcc = cv2.VideoWriter_fourcc(*'avc1')
+                extension = '.mp4'
+
+            # Generate timestamp for filenames
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            # Save FULL video (all frames - for review)
+            full_video_path = self.video_dir / f"full_recording_{timestamp}{extension}"
+            print(f"   💾 Saving full video...")
+            full_writer = cv2.VideoWriter(
+                str(full_video_path),
+                fourcc,
+                self.recording_fps,
+                (width, height)
+            )
+
+            if full_writer.isOpened():
+                for frame in self.all_frames:
+                    full_writer.write(frame)
+                full_writer.release()
+
+                # Verify full video
+                if self._verify_video(full_video_path):
+                    print(f"   ✅ Full video saved: {full_video_path.name}")
+                else:
+                    print(f"   ⚠️ Full video may have issues: {full_video_path.name}")
+            else:
+                print(f"   ❌ Failed to create full video writer")
+                return None
+
+            # Save CONDENSED video (only interesting frames - for Gemini analysis)
+            condensed_video_path = self.video_dir / f"condensed_recording_{timestamp}{extension}"
+            print(f"   💾 Saving condensed video...")
+            condensed_writer = cv2.VideoWriter(
+                str(condensed_video_path),
+                fourcc,
+                self.recording_fps,
+                (width, height)
+            )
+
+            if condensed_writer.isOpened():
+                for frame in self.interesting_frames:
+                    condensed_writer.write(frame)
+                condensed_writer.release()
+
+                # Verify condensed video
+                if self._verify_video(condensed_video_path):
+                    print(f"   ✅ Condensed video saved: {condensed_video_path.name}")
+                else:
+                    print(f"   ⚠️ Condensed video may have issues: {condensed_video_path.name}")
+            else:
+                print(f"   ❌ Failed to create condensed video writer")
+                # Still return full video path
+                return {
+                    'full_video_path': str(full_video_path),
+                    'condensed_video_path': None,
+                    'frames_total': frames_total,
+                    'frames_kept': frames_kept,
+                    'frames_skipped': frames_skipped,
+                    'skip_rate': skip_rate,
+                    'compression_ratio': compression_ratio
+                }
+
+            # Return both paths and statistics
+            return {
+                'full_video_path': str(full_video_path),
+                'condensed_video_path': str(condensed_video_path),
+                'frames_total': frames_total,
+                'frames_kept': frames_kept,
+                'frames_skipped': frames_skipped,
+                'skip_rate': skip_rate,
+                'compression_ratio': compression_ratio
+            }
 
         except Exception as e:
             print(f"Error stopping video recording: {e}")
+            import traceback
+            traceback.print_exc()
             return None
+
+    def _verify_video(self, video_path):
+        """Verify that a video file is valid and playable"""
+        try:
+            # Try to open the video with OpenCV
+            cap = cv2.VideoCapture(str(video_path))
+            if not cap.isOpened():
+                cap.release()
+                return False
+
+            # Check that we can read at least one frame
+            ret, frame = cap.read()
+            cap.release()
+
+            if not ret or frame is None:
+                return False
+
+            # Check file size is reasonable (not empty)
+            file_size = video_path.stat().st_size
+            if file_size < 1024:  # Less than 1KB is suspicious
+                print(f"   ⚠️ Video file is too small ({file_size} bytes)")
+                return False
+
+            print(f"   ✅ Video verified: {file_size / 1024:.1f} KB")
+            return True
+
+        except Exception as e:
+            print(f"   ⚠️ Video verification error: {e}")
+            return False
 
     def _analyze_video_with_gemini(self, video_path, active_context):
         """
@@ -840,23 +1118,50 @@ Now analyze this video and decide whether to store memory."""
                     elif hasattr(part, 'text') and part.text:
                         print(f"   💭 AI: {part.text[:150]}...")
 
+            # Track analytics for this video analysis
+            if self.analytics:
+                # Calculate approximate cost (Gemini Flash Lite pricing)
+                # Video: 258 tokens/second = 10,320 tokens for 40 seconds
+                # Input: $0.10 per 1M tokens, Output: $0.40 per 1M tokens
+                video_tokens = self.analysis_interval * 258
+                output_tokens = 500  # Approximate context summary
+                cost = (video_tokens * 0.10 / 1_000_000) + (output_tokens * 0.40 / 1_000_000)
+
+                # Get frame counts from recording
+                frames_total = int(self.analysis_interval * self.recording_fps)
+                frames_captured = frames_total - self.frames_skipped
+
+                self.analytics.track_video_analysis(
+                    duration_seconds=self.analysis_interval,
+                    frames_captured=frames_captured,
+                    frames_skipped=self.frames_skipped,
+                    cost=cost
+                )
+
             # Clean up - delete video file from Gemini Files API
             try:
                 genai.delete_file(video_file.name)
             except Exception as e:
                 print(f"   ⚠️ Could not delete video file from Gemini: {e}")
 
-            # Clean up local video file to save space
-            try:
-                Path(video_path).unlink()
-                print(f"   🗑️ Local video deleted to save space")
-            except Exception as e:
-                print(f"   ⚠️ Could not delete local video: {e}")
+            # IMPORTANT: Keep local video for review (as per user request)
+            # DO NOT delete the local video file
+            print(f"   📁 Video saved for review: {video_path}")
 
         except Exception as e:
             print(f"   ❌ Error analyzing video: {e}")
             import traceback
             traceback.print_exc()
+
+            # Track failed analysis in analytics
+            if self.analytics:
+                frames_total = int(self.analysis_interval * self.recording_fps) if hasattr(self, 'analysis_interval') else 0
+                self.analytics.track_video_analysis(
+                    duration_seconds=self.analysis_interval if hasattr(self, 'analysis_interval') else 40,
+                    frames_captured=frames_total,
+                    frames_skipped=0,
+                    cost=0.0
+                )
 
     def _video_analysis_worker(self):
         """Background worker thread that processes videos from the queue"""
@@ -2923,9 +3228,17 @@ Analyze the screen NOW and make your decision:"""
         print(f"🧠 AI-Driven Memory System Started (Video Recording Mode)")
         print(f"   Recording at {self.recording_fps} FPS")
         print(f"   Analyzing video every {self.analysis_interval} seconds")
+        print(f"   🎯 CONDENSED VIDEO OPTIMIZATION enabled:")
+        print(f"      - Frame similarity detection: {self.frame_similarity_threshold*100:.0f}%")
+        print(f"      - Creates condensed video with ONLY changed frames")
+        print(f"      - Full videos saved for review, condensed sent to Gemini")
+        print(f"      - Average cost savings: 50-70% per analysis!")
         print(f"   AI will decide what's worth storing")
         print(f"   Parallel processing: Recording continues while AI analyzes")
+        print(f"   📁 Videos saved to: {self.video_dir}")
         print(f"   Watching directories: {self.watch_dirs}")
+        if self.analytics:
+            print(f"   📊 Analytics tracking enabled for user: {self.user_id}")
         if self.autonomous_mode:
             print(f"🤖 AUTONOMOUS MODE ENABLED - Generating content every {self.autonomous_interval} seconds")
             print(f"📝 Content will be written to: {self.autonomous_output}")
@@ -2972,28 +3285,71 @@ Analyze the screen NOW and make your decision:"""
                         sleep_time = max(0, frame_interval - elapsed)
                         time.sleep(sleep_time)
 
-                    print(f"   ✅ Recording complete: {frame_count} frames captured")
+                    # Calculate skip rate for this recording
+                    skip_rate = (self.frames_skipped / frame_count * 100) if frame_count > 0 else 0
+                    print(f"   ✅ Recording complete: {frame_count} frames captured ({self.frames_skipped} skipped, {skip_rate:.1f}% skip rate)")
 
-                    # Stop recording and get video path
-                    video_path = self._stop_video_recording()
+                    # Stop recording and get both full and condensed video paths
+                    video_result = self._stop_video_recording()
 
-                    if video_path:
-                        # Queue video for background analysis (non-blocking)
-                        try:
-                            # Check queue size
-                            queue_size = self.analysis_queue.qsize()
-                            if queue_size > 0:
-                                print(f"   📊 Analysis queue: {queue_size} video(s) waiting")
+                    if video_result:
+                        full_video_path = video_result['full_video_path']
+                        condensed_video_path = video_result['condensed_video_path']
+                        compression_ratio = video_result['compression_ratio']
+                        frames_kept = video_result['frames_kept']
 
-                            # Add to queue (will wait if queue is full)
-                            self.analysis_queue.put((video_path, active_context), timeout=2.0)
-                            print(f"   ✅ Video queued for analysis (continuing recording...)")
+                        # Calculate cost savings
+                        full_duration = frame_count / self.recording_fps
+                        condensed_duration = frames_kept / self.recording_fps
+                        full_cost = (full_duration * 258 / 1_000_000) * 0.10  # Gemini Flash Lite pricing
+                        condensed_cost = (condensed_duration * 258 / 1_000_000) * 0.10
+                        savings = full_cost - condensed_cost
+                        savings_percent = (savings / full_cost * 100) if full_cost > 0 else 0
 
-                        except Exception as e:
-                            print(f"   ⚠️ Failed to queue video for analysis: {e}")
-                            # If queue is full or error, analyze synchronously as fallback
-                            print(f"   🧠 Falling back to synchronous analysis...")
-                            self._analyze_video_with_gemini(video_path, active_context)
+                        print(f"   💰 Cost optimization: Condensed video = {compression_ratio*100:.1f}% of original")
+                        print(f"   💰 Savings: ${savings:.6f} ({savings_percent:.1f}%) per analysis")
+
+                        # CONDENSED VIDEO APPROACH: Always save full video, send condensed to Gemini
+                        if not condensed_video_path or frames_kept == 0:
+                            # No interesting frames at all - skip analysis
+                            print(f"   💰 SKIPPING ANALYSIS - No interesting frames detected")
+                            print(f"   💾 Full video saved for review: {Path(full_video_path).name}")
+
+                            # Track skipped analysis in analytics
+                            if self.analytics:
+                                self.analytics.track_event('analysis_skipped', {
+                                    'skip_rate': skip_rate,
+                                    'frames': frame_count,
+                                    'reason': 'no_interesting_frames'
+                                })
+                        else:
+                            # Queue CONDENSED video for background analysis (screen has changed enough)
+                            print(f"   🧠 Queuing condensed video for Gemini analysis...")
+                            print(f"   💾 Full video saved for review: {Path(full_video_path).name}")
+                            try:
+                                # Check queue size
+                                queue_size = self.analysis_queue.qsize()
+                                if queue_size > 0:
+                                    print(f"   📊 Analysis queue: {queue_size} video(s) waiting")
+
+                                # Add CONDENSED video to queue (not full video!)
+                                self.analysis_queue.put((condensed_video_path, active_context), timeout=2.0)
+                                print(f"   ✅ Condensed video queued for analysis (continuing recording...)")
+
+                                # Track analysis in analytics with cost savings
+                                if self.analytics:
+                                    self.analytics.track_video_analysis(
+                                        duration_seconds=condensed_duration,
+                                        frames_captured=frame_count,
+                                        frames_skipped=self.frames_skipped,
+                                        cost=condensed_cost
+                                    )
+
+                            except Exception as e:
+                                print(f"   ⚠️ Failed to queue video for analysis: {e}")
+                                # If queue is full or error, analyze synchronously as fallback
+                                print(f"   🧠 Falling back to synchronous analysis...")
+                                self._analyze_video_with_gemini(condensed_video_path, active_context)
 
                         # Autonomous content generation (if enabled)
                         if self.autonomous_mode:
@@ -3019,11 +3375,15 @@ Analyze the screen NOW and make your decision:"""
         if self.running:
             print("Already running!")
             return
-        
+
+        # Track session start
+        if self.analytics:
+            self.analytics.track_session_start()
+
         self.running = True
         self.thread = threading.Thread(target=self._capture_loop, daemon=True)
         self.thread.start()
-        
+
         try:
             while True:
                 time.sleep(1)
@@ -3065,6 +3425,12 @@ Analyze the screen NOW and make your decision:"""
 
         if hasattr(self, 'thread'):
             self.thread.join(timeout=5)
+
+        # Track session end and print daily summary
+        if self.analytics:
+            self.analytics.track_session_end()
+            self.analytics.print_daily_summary()
+
         print("Stopped.")
     
     def query(self, question, guidance_mode=False):

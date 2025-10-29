@@ -13,7 +13,11 @@
       "Bash(python:*)",
       "Bash(sed:*)",
       "WebFetch(domain:ai.google.dev)",
-      "WebFetch(domain:mem0.ai)"
+      "WebFetch(domain:mem0.ai)",
+      "Bash(findstr:*)",
+      "Bash(pip install:*)",
+      "Bash(dir:*)",
+      "Bash(echo:*)"
     ],
     "deny": [],
     "ask": []
