@@ -3067,8 +3067,17 @@ Analyze the screen NOW and make your decision:"""
             self.thread.join(timeout=5)
         print("Stopped.")
     
-    def query(self, question):
-        """Query stored context using RAG-based retrieval with Claude or Gemini"""
+    def query(self, question, guidance_mode=False):
+        """Query stored context using RAG-based retrieval with Claude or Gemini
+
+        Args:
+            question: The user's question
+            guidance_mode: If True, use fast model with live screenshot for real-time guidance
+        """
+        # In guidance mode, use fast lightweight approach with live screen capture
+        if guidance_mode:
+            return self._query_with_guidance(question)
+
         # Use the model specified by qa_model preference
         if self.qa_model == "claude" and self.claude_client:
             return self._query_with_claude(question)
@@ -3077,6 +3086,111 @@ Analyze the screen NOW and make your decision:"""
             return self._query_with_gemini(question)
         else:
             return self._query_with_gemini(question)
+
+    def _query_with_guidance(self, question):
+        """Fast guidance mode with live screenshot for instant help
+
+        Uses gemini-2.5-flash-latest for speed and includes live screen capture.
+        """
+        print(f"\n{'='*60}")
+        print("🚀 GUIDANCE MODE - INSTANT HELP")
+        print(f"{'='*60}")
+        print("\n📸 Capturing live screenshot...")
+
+        # Emit progress
+        self._emit_progress("GUIDANCE_MODE", {
+            "status": "Capturing screen"
+        })
+
+        # Capture current screenshot
+        try:
+            screenshot = ImageGrab.grab()
+            # Save temporarily
+            temp_screenshot_path = self.screenshot_dir / f"guidance_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+            screenshot.save(temp_screenshot_path, 'PNG')
+            print(f"✓ Screenshot captured: {temp_screenshot_path}")
+        except Exception as e:
+            print(f"Error capturing screenshot: {e}")
+            return f"Error capturing screenshot: {str(e)}"
+
+        # Get active context (files, apps, etc.)
+        active_context = self._get_active_context()
+
+        # Get just the most recent stored context for additional info
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT timestamp, description, screen_text
+            FROM context_snapshots
+            ORDER BY timestamp DESC
+            LIMIT 3
+        ''')
+        recent_contexts = cursor.fetchall()
+        conn.close()
+
+        # Build lightweight context string
+        context_parts = []
+        if active_context.get('active_files'):
+            context_parts.append("Current Files:\n" + "\n".join([f"  - {f}" for f in active_context['active_files'][:5]]))
+        if active_context.get('active_apps'):
+            context_parts.append("Active Apps:\n" + "\n".join([f"  - {app}" for app in active_context['active_apps'][:3]]))
+
+        if recent_contexts:
+            context_parts.append("\nRecent Activity:")
+            for timestamp, desc, screen_text in recent_contexts:
+                context_parts.append(f"[{timestamp}] {desc[:200]}")
+
+        context_str = "\n\n".join(context_parts) if context_parts else "No recent context available."
+
+        # Emit progress
+        self._emit_progress("GUIDANCE_MODE", {
+            "status": "Analyzing with AI"
+        })
+
+        # Use fast model - gemini-2.5-flash-latest
+        try:
+            flash_model = genai.GenerativeModel('gemini-flash-latest')
+
+            # Load the screenshot
+            screenshot_image = Image.open(temp_screenshot_path)
+
+            prompt = f"""You are an AI assistant in GUIDANCE MODE - providing instant, helpful guidance for tasks.
+
+The user is asking: {question}
+
+Here's what I can see on their screen right now (screenshot attached) and recent context:
+
+{context_str}
+
+Provide clear, concise, step-by-step guidance to help them with their task. Be specific and reference what you see on the screen. Keep your response focused and actionable.
+
+If you see they're working on a specific task (like setting up email forwarding in Cloudflare), provide the next steps they need to take based on what's currently on their screen."""
+
+            print("\n🤖 Generating instant response with Gemini Flash...")
+
+            response = flash_model.generate_content([prompt, screenshot_image])
+
+            # Clean up temp screenshot
+            try:
+                temp_screenshot_path.unlink()
+            except:
+                pass
+
+            # Emit completion
+            self._emit_progress("GUIDANCE_MODE", {
+                "status": "Complete"
+            })
+
+            print("\n✓ Guidance complete!")
+
+            return {
+                "display": response.text,
+                "gemini_raw": response.text
+            }
+
+        except Exception as e:
+            print(f"Error in guidance mode: {e}")
+            return f"Error generating guidance: {str(e)}"
 
     def _query_with_gemini(self, question):
         """Query stored context using RAG-based retrieval with Gemini (fallback)"""

@@ -57,7 +57,7 @@ USE_PYQT6 = True
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QLineEdit, QTextEdit, QListWidget, QListWidgetItem, QFileDialog, QMessageBox, QSpinBox,
-    QGraphicsDropShadowEffect, QTabWidget, QComboBox, QScrollArea, QFrame
+    QGraphicsDropShadowEffect, QTabWidget, QComboBox, QScrollArea, QFrame, QCheckBox
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
 from PyQt6.QtGui import QFont, QAction, QColor
@@ -296,8 +296,14 @@ class CompanionRunner(threading.Thread):
                 success, msg = self._call_stop()
                 _from_companion_q.put(("STOPPED" if success else "ERROR", msg))
             elif cmd == "ASK":
-                question = payload
-                resp = self._call_ask(question)
+                # Handle both old string format and new dict format
+                if isinstance(payload, dict):
+                    question = payload.get("question", "")
+                    guidance_mode = payload.get("guidance_mode", False)
+                else:
+                    question = payload
+                    guidance_mode = False
+                resp = self._call_ask(question, guidance_mode)
                 _from_companion_q.put(("RESPONSE", resp))
             elif cmd == "GET_MEMORIES":
                 # Get all memories from backend
@@ -368,14 +374,20 @@ class CompanionRunner(threading.Thread):
         # If none exists: can't reliably stop
         return False, "No recognized stop method/flag on BackgroundCompanion."
 
-    def _call_ask(self, question: str):
+    def _call_ask(self, question: str, guidance_mode: bool = False):
         if not self.companion:
             return "Companion not instantiated."
         # Try expected names: ask, query, ask_gemini, send_prompt
         for method_name in ("ask", "query", "ask_gemini", "send_prompt", "chat"):
             if hasattr(self.companion, method_name):
                 try:
-                        result = getattr(self.companion, method_name)(question)
+                        # Check if method accepts guidance_mode parameter
+                        import inspect
+                        sig = inspect.signature(getattr(self.companion, method_name))
+                        if 'guidance_mode' in sig.parameters:
+                            result = getattr(self.companion, method_name)(question, guidance_mode=guidance_mode)
+                        else:
+                            result = getattr(self.companion, method_name)(question)
                         # If backend returns a structured response (dict with display+gemini_raw), forward it
                         return result
                 except Exception as e:
@@ -669,6 +681,24 @@ class OverlayWindow(QWidget):
         self.hide_btn.setFixedHeight(32)
         btn_h.addWidget(self.hide_btn, 1)
         chat_layout.addLayout(btn_h)
+
+        # Guidance mode toggle
+        guidance_h = QHBoxLayout()
+        guidance_h.setSpacing(12)
+
+        self.guidance_mode_checkbox = QCheckBox("Guidance Mode")
+        self.guidance_mode_checkbox.setObjectName("modernCheckbox")
+        self.guidance_mode_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.guidance_mode_checkbox.setToolTip("Enable real-time screen capture and instant AI guidance")
+        guidance_h.addWidget(self.guidance_mode_checkbox)
+
+        guidance_label = QLabel("(Live screen capture + instant responses)")
+        guidance_label.setObjectName("subtleLabel")
+        guidance_label.setStyleSheet("color: #9CA3AF; font-size: 11px;")
+        guidance_h.addWidget(guidance_label)
+
+        guidance_h.addStretch()
+        chat_layout.addLayout(guidance_h)
 
         # Response display - maximize this area, no border
         self.response_area = MarkdownTextEdit()
@@ -1533,7 +1563,10 @@ class OverlayWindow(QWidget):
         q = self.ask_edit.text().strip()
         if not q:
             return
-        _to_companion_q.put(("ASK", q))
+
+        # Include guidance mode status with the question
+        guidance_mode = self.guidance_mode_checkbox.isChecked()
+        _to_companion_q.put(("ASK", {"question": q, "guidance_mode": guidance_mode}))
         # optionally clear input
         self.ask_edit.clear()
 
@@ -1992,8 +2025,11 @@ class OverlayWindow(QWidget):
                 self.signals.status.emit("Idle")
                 self.signals.log.emit(str(payload))
             elif typ == "RESPONSE":
-                # Could be complex object; coerce to str
-                self.signals.response.emit(str(payload))
+                # Handle structured response (dict with display/gemini_raw) or plain string
+                if isinstance(payload, dict) and "display" in payload:
+                    self.signals.response.emit(payload["display"])
+                else:
+                    self.signals.response.emit(str(payload))
             elif typ == "ERROR":
                 self.signals.log.emit("<span style='color: #EF4444;'>[ERROR]</span> " + str(payload))
             elif typ == "CONFIG_UPDATED":
