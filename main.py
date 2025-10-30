@@ -854,6 +854,41 @@ class OverlayWindow(QWidget):
         watch_btn_h.addWidget(remove_dir_btn)
         settings_layout.addLayout(watch_btn_h)
 
+        # Startup behavior section
+        startup_lbl = QLabel("STARTUP BEHAVIOR")
+        startup_lbl.setObjectName("sectionLabel")
+        settings_layout.addWidget(startup_lbl)
+
+        # Start on boot checkbox
+        from onboarding import OnboardingDialog
+        self.start_on_boot_checkbox = QCheckBox("Start Ghost Widget when Windows starts")
+        self.start_on_boot_checkbox.setObjectName("modernCheckBox")
+        self.start_on_boot_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #D4D4D8;
+                font-size: 12px;
+                spacing: 10px;
+            }
+            QCheckBox::indicator {
+                width: 20px;
+                height: 20px;
+                border: 2px solid #52525B;
+                border-radius: 4px;
+                background-color: #18181B;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #4285f4;
+                border-color: #4285f4;
+                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEzLjUgNEw2IDExLjVMMi41IDgiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+Cjwvc3ZnPgo=);
+            }
+            QCheckBox::indicator:hover {
+                border-color: #71717A;
+            }
+        """)
+        self.start_on_boot_checkbox.setChecked(OnboardingDialog.is_start_on_boot_enabled())
+        self.start_on_boot_checkbox.stateChanged.connect(self.on_start_on_boot_changed)
+        settings_layout.addWidget(self.start_on_boot_checkbox)
+
         settings_layout.addStretch()
 
         # Add settings tab
@@ -1500,6 +1535,14 @@ class OverlayWindow(QWidget):
         for item in list(self.watch_list.selectedItems()):
             self.watch_list.takeItem(self.watch_list.row(item))
 
+    def on_start_on_boot_changed(self, state):
+        """Handle start on boot checkbox state change"""
+        from onboarding import OnboardingDialog
+        if state == Qt.CheckState.Checked.value:
+            OnboardingDialog.enable_start_on_boot(self)
+        else:
+            OnboardingDialog.disable_start_on_boot()
+
     def save_config(self):
         conf = self._gather_config_from_ui()
         try:
@@ -1526,7 +1569,8 @@ class OverlayWindow(QWidget):
             "fps": int(self.fps_spin.value()),
             "watch_dirs": watch_dirs,
             "always_recent": self.config.get("always_recent", 3),
-            "qa_model": self.qa_model_combo.currentData()
+            "qa_model": self.qa_model_combo.currentData(),
+            "onboarding_completed": self.config.get("onboarding_completed", False)
         }
 
     def on_start_stop(self):
@@ -2151,7 +2195,8 @@ def load_config():
         "interval": 10,
         "watch_dirs": [],
         "always_recent": 3,
-        "qa_model": "gemini"
+        "qa_model": "gemini",
+        "onboarding_completed": False
     }
     try:
         if CONFIG_PATH.exists():
@@ -2173,9 +2218,31 @@ def companion_queue_forwarder():
         # placeholder
 
 
+def save_config_to_file(config):
+    """Save configuration to file"""
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        print(f"[WARNING] Failed to save config: {e}")
+
+
 def main():
     config = load_config()
     app = QApplication(sys.argv)
+
+    # Show onboarding for first-time users
+    if not config.get("onboarding_completed", False):
+        from onboarding import OnboardingDialog
+        onboarding = OnboardingDialog()
+        result = onboarding.exec()
+
+        if result == OnboardingDialog.DialogCode.Accepted:
+            # Mark onboarding as completed
+            config["onboarding_completed"] = True
+            save_config_to_file(config)
+            print("[OK] Onboarding completed")
+
     w = OverlayWindow(config)
 
     # Position window on right-center of the screen

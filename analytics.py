@@ -8,6 +8,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 import threading
+import requests
+import uuid
 
 # Optional Firebase Admin SDK for future cloud sync
 try:
@@ -33,6 +35,7 @@ class AnalyticsTracker:
         """
         self.user_id = user_id
         self.session_start = datetime.now()
+        self.client_id = str(uuid.uuid4())  # Unique client ID for GA4
         self.daily_stats = {
             'video_analyses': 0,
             'questions_asked': 0,
@@ -56,24 +59,70 @@ class AnalyticsTracker:
                     firebase_config = json.load(f)
                 self.project_id = firebase_config.get("projectId")
                 self.measurement_id = firebase_config.get("measurementId")
+                # Try dedicated GA4 API secret first, fall back to apiKey (for backwards compatibility)
+                self.api_secret = firebase_config.get("ga4_api_secret") or firebase_config.get("apiKey")
             else:
                 self.project_id = None
                 self.measurement_id = None
+                self.api_secret = None
 
             # Enable local tracking (always works)
             self.enabled = True
             print(f"[OK] Analytics initialized for user: {user_id}")
 
-            # Firebase cloud sync is optional (for future use)
+            # Firebase cloud sync via GA4 Measurement Protocol
             self.firebase_enabled = False
-            if FIREBASE_AVAILABLE and self.project_id:
-                print(f"   Firebase project: {self.project_id} (cloud sync available)")
+            if self.measurement_id and self.api_secret:
+                print(f"   Firebase Analytics: {self.measurement_id} (cloud sync enabled)")
                 self.firebase_enabled = True
+                # Track app start
+                self._send_to_firebase('app_start', {})
+            else:
+                print(f"   Firebase Analytics: disabled (missing configuration)")
 
         except Exception as e:
             print(f"[WARNING] Failed to initialize analytics: {e}")
             print(f"   Analytics will continue with basic tracking.")
             self.enabled = True  # Still enable basic tracking
+
+    def _send_to_firebase(self, event_name, params):
+        """
+        Send event to Firebase Analytics via GA4 Measurement Protocol
+        https://developers.google.com/analytics/devguides/collection/protocol/ga4
+        """
+        if not self.firebase_enabled:
+            return
+
+        try:
+            # GA4 Measurement Protocol endpoint
+            url = f"https://www.google-analytics.com/mp/collect?measurement_id={self.measurement_id}&api_secret={self.api_secret}"
+
+            # Prepare the payload
+            payload = {
+                "client_id": self.client_id,
+                "user_id": self.user_id,
+                "events": [{
+                    "name": event_name,
+                    "params": params
+                }]
+            }
+
+            # Send asynchronously to avoid blocking
+            threading.Thread(target=self._send_request, args=(url, payload), daemon=True).start()
+
+        except Exception as e:
+            print(f"[WARNING] Failed to send analytics to Firebase: {e}")
+
+    def _send_request(self, url, payload):
+        """Helper to send the actual HTTP request"""
+        try:
+            response = requests.post(url, json=payload, timeout=5)
+            if response.status_code == 204:
+                print(f"[ANALYTICS] ✓ Event sent to Firebase")
+            else:
+                print(f"[ANALYTICS] ✗ Firebase response: {response.status_code}")
+        except Exception as e:
+            print(f"[WARNING] Analytics request failed: {e}")
 
     def track_event(self, event_name, params=None):
         """
@@ -91,8 +140,11 @@ class AnalyticsTracker:
             params['user_id'] = self.user_id
             params['timestamp'] = datetime.now().isoformat()
 
-            # Log event (in production, send to Firebase Analytics)
+            # Log event locally
             print(f"[ANALYTICS] {event_name} - {params}")
+
+            # Send to Firebase Analytics
+            self._send_to_firebase(event_name, params)
 
         except Exception as e:
             print(f"[WARNING] Analytics tracking error: {e}")
