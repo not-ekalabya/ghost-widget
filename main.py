@@ -887,7 +887,14 @@ class OverlayWindow(QWidget):
             threading.Thread(target=delete_in_background, daemon=True).start()
 
     def init_ui(self):
-        self.setWindowTitle("Ghost Widget")
+        self.setWindowTitle("Ghost")
+
+        # Set app icon
+        icon_path = Path("icons/logo-main.png")
+        if icon_path.exists():
+            from PyQt6.QtGui import QIcon
+            self.setWindowIcon(QIcon(str(icon_path)))
+
         # Visual sizing - taller to maximize chat area
         self.setFixedSize(440, 700)
 
@@ -911,13 +918,23 @@ class OverlayWindow(QWidget):
         title_h = QHBoxLayout()
         title_h.setSpacing(10)
 
+        # Logo
+        logo_label = QLabel()
+        logo_path = Path("icons/logo-main.png")
+        if logo_path.exists():
+            from PyQt6.QtGui import QPixmap
+            pixmap = QPixmap(str(logo_path))
+            scaled_pixmap = pixmap.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            logo_label.setPixmap(scaled_pixmap)
+            title_h.addWidget(logo_label)
+
         # Status indicator dot
         self.status_dot = QLabel("●")
         self.status_dot.setObjectName("statusDot")
         self.status_dot.setStyleSheet("color: #6B7280; font-size: 16px;")
         title_h.addWidget(self.status_dot)
 
-        title_lbl = QLabel("Ghost Widget")
+        title_lbl = QLabel("Ghost")
         title_lbl.setObjectName("titleLabel")
         title_font = QFont()
         title_font.setPointSize(15)
@@ -1068,10 +1085,9 @@ class OverlayWindow(QWidget):
         self.history_list.itemDoubleClicked.connect(self.on_history_item_double_clicked)
         self.history_list.setStyleSheet("""
             QListWidget#modernList {
-                background-color: rgba(0, 0, 0, 0.2);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-                border-radius: 8px;
-                padding: 8px;
+                background-color: transparent;
+                border: none;
+                padding: 0px;
                 color: #E5E7EB;
                 font-size: 12px;
             }
@@ -1189,7 +1205,7 @@ class OverlayWindow(QWidget):
 
         # Start on boot checkbox
         from onboarding import OnboardingDialog
-        self.start_on_boot_checkbox = QCheckBox("Start Ghost Widget when Windows starts")
+        self.start_on_boot_checkbox = QCheckBox("Start Ghost when Windows starts")
         self.start_on_boot_checkbox.setObjectName("modernCheckBox")
         self.start_on_boot_checkbox.setStyleSheet("""
             QCheckBox {
