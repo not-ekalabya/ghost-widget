@@ -21,6 +21,7 @@ import subprocess
 from pathlib import Path
 from queue import Queue, Empty
 from html import escape
+import datetime
 
 # Try importing markdown library
 try:
@@ -548,6 +549,13 @@ class OverlayWindow(QWidget):
         # Store conversation context for continuing chats
         self.conversation_context = None
 
+        # Track current conversation session for continuous chat
+        self.current_session = {
+            "messages": [],  # List of {question, response} dicts
+            "started_at": None,
+            "last_document_id": None
+        }
+
         self.init_ui()
         self.start_polling_companion_queue()
         self.start_auth_token_refresh_timer()
@@ -630,7 +638,7 @@ class OverlayWindow(QWidget):
             self.github_user_lbl.setStyleSheet("color: #10B981; font-size: 11px; margin-top: 8px;")
 
     def _save_chat_to_firestore(self, response_text: str):
-        """Save chat conversation to Firestore"""
+        """Add message to current session (continuous chat in one conversation)"""
         # Check if we have all required components
         if not self.chat_manager or not self.chat_manager.is_available():
             print("⚠️ Chat manager not available, skipping Firestore save")
@@ -644,37 +652,116 @@ class OverlayWindow(QWidget):
             print("⚠️ No current question to save")
             return
 
+        # Add message to current session
+        import datetime
+        if not self.current_session["started_at"]:
+            self.current_session["started_at"] = datetime.datetime.utcnow().isoformat()
+
+        self.current_session["messages"].append({
+            "question": self.current_question,
+            "response": response_text,
+            "timestamp": datetime.datetime.utcnow().isoformat()
+        })
+
+        print(f"✅ Message added to session ({len(self.current_session['messages'])} messages total)")
+
+        # Clear the current question
+        self.current_question = None
+
+        # Auto-save session to Firestore after each message
+        self._save_session_to_firestore()
+
+    def start_new_conversation(self):
+        """Start a new conversation session (clears current session)"""
+        if self.current_session["messages"]:
+            # Save current session before starting new one
+            self._save_session_to_firestore()
+
+            # Show confirmation
+            msg_count = len(self.current_session["messages"])
+            self.signals.log.emit(f"<span style='color: #10B981;'>✅ Saved conversation with {msg_count} messages</span>")
+
+        # Reset session
+        import datetime
+        self.current_session = {
+            "messages": [],
+            "started_at": None,
+            "last_document_id": None
+        }
+
+        # Clear response area
+        self.response_area.clear_messages()
+
+        # Clear conversation context
+        self.conversation_context = None
+
+        print("🆕 Started new conversation session")
+        self.signals.log.emit("<span style='color: #60A5FA;'>🆕 New conversation started</span>")
+
+    def _save_session_to_firestore(self):
+        """Save or update the current conversation session to Firestore"""
+        if not self.current_session["messages"]:
+            return
+
         # Get user ID
         user_id = self.firebase_auth.get_user_id()
         if not user_id:
-            print("⚠️ Could not get user ID, skipping Firestore save")
             return
 
-        # Save to Firestore in background thread to avoid blocking UI
+        # Save in background thread
         def save_in_background():
             try:
-                result = self.chat_manager.save_chat(
-                    user_id=user_id,
-                    message=self.current_question,
-                    response=response_text,
-                    message_type="question",
-                    metadata={
-                        "email": self.firebase_auth.get_user_email(),
-                        "display_name": self.firebase_auth.get_user_display_name()
-                    },
-                    conversation_context=self.conversation_context
-                )
-                if result["success"]:
-                    print(f"✅ Chat saved to Firestore: {result['document_id']}")
+                # Combine all messages into one conversation
+                full_conversation = ""
+                for i, msg in enumerate(self.current_session["messages"], 1):
+                    full_conversation += f"**Q{i}:** {msg['question']}\n\n"
+                    full_conversation += f"**A{i}:** {msg['response']}\n\n---\n\n"
+
+                # Get first question as title
+                first_question = self.current_session["messages"][0]["question"]
+
+                # Update existing document or create new
+                if self.current_session["last_document_id"]:
+                    # Update existing conversation
+                    result = self.chat_manager.update_chat(
+                        document_id=self.current_session["last_document_id"],
+                        message=first_question,
+                        response=full_conversation,
+                        metadata={
+                            "email": self.firebase_auth.get_user_email(),
+                            "display_name": self.firebase_auth.get_user_display_name(),
+                            "message_count": len(self.current_session["messages"]),
+                            "started_at": self.current_session["started_at"],
+                            "is_session": True,
+                            "last_updated": datetime.datetime.utcnow().isoformat()
+                        }
+                    )
                 else:
-                    print(f"❌ Failed to save chat: {result['message']}")
+                    # Create new conversation
+                    result = self.chat_manager.save_chat(
+                        user_id=user_id,
+                        message=first_question,
+                        response=full_conversation,
+                        message_type="conversation",
+                        metadata={
+                            "email": self.firebase_auth.get_user_email(),
+                            "display_name": self.firebase_auth.get_user_display_name(),
+                            "message_count": len(self.current_session["messages"]),
+                            "started_at": self.current_session["started_at"],
+                            "is_session": True
+                        },
+                        conversation_context=self.conversation_context
+                    )
+
+                if result["success"]:
+                    self.current_session["last_document_id"] = result["document_id"]
+                    print(f"✅ Session saved to Firestore: {result['document_id']}")
+                else:
+                    print(f"❌ Failed to save session: {result['message']}")
             except Exception as e:
-                print(f"❌ Error saving chat to Firestore: {e}")
+                print(f"❌ Error saving session to Firestore: {e}")
                 import traceback
                 traceback.print_exc()
-            finally:
-                # Clear the current question
-                self.current_question = None
 
         # Run in background thread
         threading.Thread(target=save_in_background, daemon=True).start()
@@ -918,21 +1005,21 @@ class OverlayWindow(QWidget):
         title_h = QHBoxLayout()
         title_h.setSpacing(10)
 
-        # Logo
+        # Logo (10x bigger: 240x240)
         logo_label = QLabel()
         logo_path = Path("icons/logo-main.png")
         if logo_path.exists():
             from PyQt6.QtGui import QPixmap
             pixmap = QPixmap(str(logo_path))
-            scaled_pixmap = pixmap.scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            scaled_pixmap = pixmap.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             logo_label.setPixmap(scaled_pixmap)
             title_h.addWidget(logo_label)
 
-        # Status indicator dot
-        self.status_dot = QLabel("●")
-        self.status_dot.setObjectName("statusDot")
-        self.status_dot.setStyleSheet("color: #6B7280; font-size: 16px;")
-        title_h.addWidget(self.status_dot)
+        # Status indicator dot - REMOVED (was distracting)
+        # self.status_dot = QLabel("●")
+        # self.status_dot.setObjectName("statusDot")
+        # self.status_dot.setStyleSheet("color: #6B7280; font-size: 16px;")
+        # title_h.addWidget(self.status_dot)
 
         title_lbl = QLabel("Ghost")
         title_lbl.setObjectName("titleLabel")
@@ -972,9 +1059,18 @@ class OverlayWindow(QWidget):
         chat_layout.setContentsMargins(0, 8, 0, 0)
         chat_layout.setSpacing(8)
 
-        # Hide button only (recording is now automatic)
+        # Top buttons row
         btn_h = QHBoxLayout()
         btn_h.setSpacing(8)
+
+        # New Conversation button
+        self.new_conversation_btn = QPushButton("New Chat")
+        self.new_conversation_btn.setObjectName("accentButton")
+        self.new_conversation_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.new_conversation_btn.clicked.connect(self.start_new_conversation)
+        self.new_conversation_btn.setFixedHeight(32)
+        self.new_conversation_btn.setToolTip("Start a new conversation (saves current one)")
+        btn_h.addWidget(self.new_conversation_btn, 1)
 
         # Recording status label
         self.recording_status_label = QLabel("🔴 Recording Active")
@@ -2279,13 +2375,13 @@ class OverlayWindow(QWidget):
 
     def set_status(self, text: str):
         self.status_lbl.setText(text)
-        # Update status dot color based on state
-        if text.lower() in ["recording", "active"]:
-            self.status_dot.setStyleSheet("color: #10B981; font-size: 16px;")
-        elif "error" in text.lower():
-            self.status_dot.setStyleSheet("color: #EF4444; font-size: 16px;")
-        else:
-            self.status_dot.setStyleSheet("color: #71717A; font-size: 16px;")
+        # Update status dot color based on state - DISABLED (dot removed)
+        # if text.lower() in ["recording", "active"]:
+        #     self.status_dot.setStyleSheet("color: #10B981; font-size: 16px;")
+        # elif "error" in text.lower():
+        #     self.status_dot.setStyleSheet("color: #EF4444; font-size: 16px;")
+        # else:
+        #     self.status_dot.setStyleSheet("color: #71717A; font-size: 16px;")
 
     def append_progress(self, event_type: str, data: dict):
         """Add progress indicator to response area"""

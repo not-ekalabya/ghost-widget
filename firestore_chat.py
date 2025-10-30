@@ -211,6 +211,55 @@ class FirestoreChatManager:
                 "chats": []
             }
 
+    def update_chat(self, document_id: str, message: str, response: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Update an existing chat document in Firestore
+
+        Args:
+            document_id: Firestore document ID to update
+            message: Updated message/title
+            response: Updated response
+            metadata: Updated metadata (optional)
+
+        Returns:
+            Dictionary with success status
+        """
+        if not self.is_available():
+            return {
+                "success": False,
+                "message": "Firestore is not available"
+            }
+
+        try:
+            doc_ref = self.db.collection(self.collection_name).document(document_id)
+
+            # Update fields
+            update_data = {
+                "message": message,
+                "response": response,
+                "timestamp": firestore.SERVER_TIMESTAMP,
+            }
+
+            if metadata:
+                update_data["metadata"] = metadata
+
+            doc_ref.update(update_data)
+
+            print(f"✅ Chat updated successfully: {document_id}")
+            return {
+                "success": True,
+                "message": "Chat updated successfully",
+                "document_id": document_id
+            }
+
+        except Exception as e:
+            error_msg = f"Failed to update chat: {str(e)}"
+            print(f"❌ {error_msg}")
+            return {
+                "success": False,
+                "message": error_msg
+            }
+
     def get_chat_by_id(self, document_id: str) -> Dict[str, Any]:
         """
         Retrieve a specific chat by document ID
