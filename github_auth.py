@@ -78,7 +78,7 @@ class GitHubAuth:
         Similar to GitHub Desktop authentication
 
         Args:
-            progress_callback: Optional callback function(message: str) for progress updates
+            progress_callback: Optional callback function(message: str, user_code=None, verification_url=None) for progress updates
 
         Returns:
             dict: {'success': bool, 'message': str, 'user': str or None}
@@ -127,16 +127,25 @@ class GitHubAuth:
             interval = device_data.get('interval', 5)
 
             # Step 2: Show user code and open browser
-            if progress_callback:
-                progress_callback(f"🔐 User Code: {user_code}")
-                progress_callback(f"Opening browser to {verification_uri}...")
-
             print(f"\n{'='*60}")
             print(f"🔐 GitHub Authentication")
             print(f"{'='*60}")
             print(f"User Code: {user_code}")
             print(f"Opening browser to: {verification_uri}")
             print(f"{'='*60}\n")
+
+            if progress_callback:
+                # Send structured user code data to the callback
+                print(f"[GITHUB_AUTH] Calling progress_callback with user_code={user_code}")
+                try:
+                    # Try calling with keyword arguments (for GUI)
+                    progress_callback("Opening browser...", user_code=user_code, verification_url=verification_uri)
+                    print(f"[GITHUB_AUTH] Successfully called progress_callback with keyword args")
+                except TypeError as e:
+                    print(f"[GITHUB_AUTH] TypeError calling progress_callback: {e}")
+                    # Fallback to simple string message (for console/older callers)
+                    progress_callback(f"🔐 User Code: {user_code}")
+                    progress_callback(f"Opening browser to {verification_uri}...")
 
             # Open browser
             webbrowser.open(verification_uri)

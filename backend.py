@@ -60,7 +60,7 @@ except ImportError:
     print("Warning: GitHub integration not available. Install with: pip install PyGithub")
 
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=10, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini", recording_fps=1, analysis_interval=40, skip_static_threshold=70.0):
+    def __init__(self, api_key, capture_interval=10, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini", recording_fps=1, analysis_interval=40, skip_static_threshold=70.0, save_recordings=False):
         """
         Initialize the background companion with RAG support and autonomous content generation
 
@@ -81,6 +81,8 @@ class BackgroundCompanion:
             analysis_interval: Seconds between video analysis (default: 40)
             skip_static_threshold: Skip analysis if >N% of frames are static (default: 70.0)
                                    Set to 100 to never skip, 0 to always skip
+            save_recordings: Whether to save video recordings and screenshots to disk (default: False)
+                            Set to True to enable saving for debugging or review purposes
         """
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-flash-lite-latest')
@@ -103,6 +105,7 @@ class BackgroundCompanion:
         self.progress_callback = progress_callback  # For GUI progress updates
         self.user_id = user_id  # Store user_id for per-user memory separation
         self.qa_model = qa_model.lower()  # Store preferred QA model ("claude" or "gemini")
+        self.save_recordings = save_recordings  # Whether to save recordings/screenshots to disk
 
         # Video recording state
         self.video_writer = None
@@ -861,6 +864,20 @@ class BackgroundCompanion:
 
             print(f"   📊 Video stats: {frames_total} frames total, {frames_kept} kept ({compression_ratio*100:.1f}%), {frames_skipped} skipped ({skip_rate:.1f}%)")
 
+            # Only save videos to disk if save_recordings is enabled
+            if not self.save_recordings:
+                print(f"   ℹ️ Recording saving disabled. Videos kept in memory only (set save_recordings=True to enable saving)")
+                # Return stats without saving
+                return {
+                    'full_video_path': None,
+                    'condensed_video_path': None,
+                    'frames_total': frames_total,
+                    'frames_kept': frames_kept,
+                    'frames_skipped': frames_skipped,
+                    'skip_rate': skip_rate,
+                    'compression_ratio': compression_ratio
+                }
+
             # Get frame dimensions
             height, width = self.all_frames[0].shape[:2]
 
@@ -880,7 +897,7 @@ class BackgroundCompanion:
 
             # Save FULL video (all frames - for review)
             full_video_path = self.video_dir / f"full_recording_{timestamp}{extension}"
-            print(f"   💾 Saving full video...")
+            print(f"   💾 Saving full video to disk...")
             full_writer = cv2.VideoWriter(
                 str(full_video_path),
                 fourcc,
@@ -3454,12 +3471,13 @@ Analyze the screen NOW and make your decision:"""
             return self._query_with_gemini(question)
 
     def _query_with_guidance(self, question):
-        """Fast guidance mode with live screenshot for instant help
+        """Fast guidance mode with live screenshot and full tool access
 
-        Uses gemini-2.5-flash-latest for speed and includes live screen capture.
+        Uses gemini-flash-latest for speed while maintaining all tool calling capabilities.
+        Includes live screen capture for instant help.
         """
         print(f"\n{'='*60}")
-        print("🚀 GUIDANCE MODE - INSTANT HELP")
+        print("🚀 GUIDANCE MODE - INSTANT HELP WITH FULL TOOLS")
         print(f"{'='*60}")
         print("\n📸 Capturing live screenshot...")
 
@@ -3469,93 +3487,222 @@ Analyze the screen NOW and make your decision:"""
         })
 
         # Capture current screenshot
+        screenshot_path = None
+        screenshot_image = None
         try:
             screenshot = ImageGrab.grab()
-            # Save temporarily
-            temp_screenshot_path = self.screenshot_dir / f"guidance_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-            screenshot.save(temp_screenshot_path, 'PNG')
-            print(f"✓ Screenshot captured: {temp_screenshot_path}")
+            screenshot_image = screenshot  # Keep in memory
+
+            # Only save to disk if save_recordings is enabled
+            if self.save_recordings:
+                screenshot_path = self.screenshot_dir / f"guidance_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                screenshot.save(screenshot_path, 'PNG')
+                print(f"✓ Screenshot captured and saved: {screenshot_path}")
+            else:
+                print(f"✓ Screenshot captured (not saved to disk)")
         except Exception as e:
-            print(f"Error capturing screenshot: {e}")
-            return f"Error capturing screenshot: {str(e)}"
+            print(f"⚠️ Warning: Could not capture screenshot: {e}")
 
         # Get active context (files, apps, etc.)
         active_context = self._get_active_context()
 
-        # Get just the most recent stored context for additional info
+        # Get recent stored context
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT timestamp, description, screen_text
+            SELECT timestamp, description, screen_text, active_files, open_applications
             FROM context_snapshots
             ORDER BY timestamp DESC
-            LIMIT 3
+            LIMIT 5
         ''')
         recent_contexts = cursor.fetchall()
         conn.close()
 
-        # Build lightweight context string
+        # Build context string with file information
         context_parts = []
+        all_files = set()
+
         if active_context.get('active_files'):
-            context_parts.append("Current Files:\n" + "\n".join([f"  - {f}" for f in active_context['active_files'][:5]]))
+            all_files.update(active_context['active_files'][:10])
+            context_parts.append("Current Files:\n" + "\n".join([f"  - {f}" for f in active_context['active_files'][:10]]))
         if active_context.get('active_apps'):
-            context_parts.append("Active Apps:\n" + "\n".join([f"  - {app}" for app in active_context['active_apps'][:3]]))
+            context_parts.append("Active Apps:\n" + "\n".join([f"  - {app}" for app in active_context['active_apps'][:5]]))
 
         if recent_contexts:
             context_parts.append("\nRecent Activity:")
-            for timestamp, desc, screen_text in recent_contexts:
-                context_parts.append(f"[{timestamp}] {desc[:200]}")
+            for timestamp, desc, screen_text, files_json, apps_json in recent_contexts:
+                context_parts.append(f"[{timestamp}] {desc[:300]}")
+
+                if files_json:
+                    try:
+                        files = json.loads(files_json)
+                        if files:
+                            all_files.update(files)
+                    except:
+                        pass
 
         context_str = "\n\n".join(context_parts) if context_parts else "No recent context available."
 
+        # Add file summary
+        if all_files:
+            files_summary = "\n\nAll Recently Accessed Files:\n" + "\n".join([f"  - {f}" for f in list(all_files)[:20]])
+            context_str += files_summary
+
         # Emit progress
         self._emit_progress("GUIDANCE_MODE", {
-            "status": "Analyzing with AI"
+            "status": "Analyzing with AI (with tools)"
         })
 
-        # Use fast model - gemini-2.5-flash-latest
+        # Use fast model with tools - gemini-flash-latest
         try:
-            flash_model = genai.GenerativeModel('gemini-flash-latest')
+            flash_model = genai.GenerativeModel(
+                'gemini-flash-latest',
+                tools=self.tools
+            )
 
-            # Load the screenshot
-            screenshot_image = Image.open(temp_screenshot_path)
+            # Build initial prompt
+            prompt = f"""You are an AI assistant in GUIDANCE MODE - providing instant, helpful guidance with FULL TOOL ACCESS.
 
-            prompt = f"""You are an AI assistant in GUIDANCE MODE - providing instant, helpful guidance for tasks.
-
-The user is asking: {question}
-
-Here's what I can see on their screen right now (screenshot attached) and recent context:
-
+CURRENT SCREEN CONTEXT:
 {context_str}
 
-Provide clear, concise, step-by-step guidance to help them with their task. Be specific and reference what you see on the screen. Keep your response focused and actionable.
+You have access to ALL tools including:
+- FILE SYSTEM TOOLS: read_file_as_text, read_file_with_vision, list_directory, get_file_info, search_files, get_recent_files
+- GITHUB TOOLS: github_get_user_repos, github_get_commits, github_get_repo_info, github_get_readme, github_get_pull_requests, github_get_issues, github_get_branches, github_read_file, github_list_directory, and more
+- WEB SEARCH: search_web
 
-If you see they're working on a specific task (like setting up email forwarding in Cloudflare), provide the next steps they need to take based on what's currently on their screen."""
+CRITICAL INSTRUCTIONS:
+- BE PROACTIVE with your tools - use them to gather information the user needs
+- For code/file questions: Use file reading tools or GitHub tools to explore
+- For GitHub questions: Use github_get_user_repos and other GitHub tools
+- Use FULL ABSOLUTE PATHS from the "All Recently Accessed Files" section above
+- Provide INSTANT, ACTIONABLE guidance based on what you can access
 
-            print("\n🤖 Generating instant response with Gemini Flash...")
+User Question: {question}
 
-            response = flash_model.generate_content([prompt, screenshot_image])
+Provide clear, concise, step-by-step guidance. Use your tools to access real information rather than saying "I don't have access"."""
 
-            # Clean up temp screenshot
-            try:
-                temp_screenshot_path.unlink()
-            except:
-                pass
+            print("\n🤖 Generating instant response with Gemini Flash + Tools...")
+
+            # Start chat with tools
+            chat = flash_model.start_chat()
+
+            # If we have a screenshot, include it (use in-memory image)
+            if screenshot_image:
+                response = chat.send_message([prompt, screenshot_image])
+            else:
+                response = chat.send_message(prompt)
+
+            # Handle function calls (same as normal mode but with iteration limit for speed)
+            max_iterations = 8  # Reduced from 10 for faster guidance
+            iteration = 0
+            tool_execution_count = 0
+
+            while iteration < max_iterations:
+                if not response or not hasattr(response, 'candidates') or not response.candidates:
+                    break
+
+                candidate = response.candidates[0]
+                if not hasattr(candidate, 'content') or not candidate.content:
+                    break
+
+                parts = candidate.content.parts
+                if not parts:
+                    break
+
+                # Check if there are function calls
+                has_function_call = any(hasattr(part, 'function_call') and part.function_call for part in parts)
+
+                if not has_function_call:
+                    break
+
+                # Execute all function calls
+                function_responses = []
+                for part in parts:
+                    if hasattr(part, 'function_call') and part.function_call:
+                        fc = part.function_call
+                        func_name = fc.name
+                        func_args = dict(fc.args) if fc.args else {}
+
+                        # Emit progress
+                        self._emit_progress("TOOL_EXECUTE", {
+                            "tool_name": func_name,
+                            "args": func_args
+                        })
+
+                        print(f"  🔧 Tool: {func_name}({func_args})")
+
+                        # Call the function
+                        try:
+                            result = self._execute_tool(func_name, func_args)
+                            tool_execution_count += 1
+
+                            self._emit_progress("TOOL_COMPLETE", {
+                                "tool_name": func_name,
+                                "status": "success"
+                            })
+
+                            print(f"  ✓ Result: {str(result)[:200]}...")
+                        except Exception as e:
+                            result = f"Error executing {func_name}: {str(e)}"
+                            print(f"  ✗ Error: {result}")
+
+                            self._emit_progress("TOOL_COMPLETE", {
+                                "tool_name": func_name,
+                                "status": "error",
+                                "error": str(e)
+                            })
+
+                        # Add function response
+                        function_responses.append(
+                            genai.protos.Part(
+                                function_response=genai.protos.FunctionResponse(
+                                    name=func_name,
+                                    response={'result': result}
+                                )
+                            )
+                        )
+
+                # Send function results back to model
+                if function_responses:
+                    response = chat.send_message(function_responses)
+                    iteration += 1
+                else:
+                    break
+
+            # Clean up screenshot
+            if screenshot_path and screenshot_path.exists():
+                try:
+                    screenshot_path.unlink()
+                except:
+                    pass
+
+            # Extract final response
+            final_text = ""
+            if response and hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content') and candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'text') and part.text:
+                            final_text += part.text
 
             # Emit completion
             self._emit_progress("GUIDANCE_MODE", {
-                "status": "Complete"
+                "status": "Complete",
+                "tools_used": tool_execution_count
             })
 
-            print("\n✓ Guidance complete!")
+            print(f"\n✓ Guidance complete! (Used {tool_execution_count} tools)")
 
             return {
-                "display": response.text,
-                "gemini_raw": response.text
+                "display": final_text if final_text else "No response generated.",
+                "gemini_raw": final_text if final_text else "No response generated."
             }
 
         except Exception as e:
+            import traceback
             print(f"Error in guidance mode: {e}")
+            traceback.print_exc()
             return f"Error generating guidance: {str(e)}"
 
     def _query_with_gemini(self, question):

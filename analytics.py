@@ -57,10 +57,10 @@ class AnalyticsTracker:
             if config_path.exists():
                 with open(config_path, 'r') as f:
                     firebase_config = json.load(f)
-                self.project_id = firebase_config.get("projectId")
-                self.measurement_id = firebase_config.get("measurementId")
+                self.project_id = "ghost-widget-7000"
+                self.measurement_id = "G-XGLGL9E2TJ" # replace with google-config
                 # Try dedicated GA4 API secret first, fall back to apiKey (for backwards compatibility)
-                self.api_secret = firebase_config.get("ga4_api_secret") or firebase_config.get("apiKey")
+                self.api_secret = "AIzaSyBsig0QxBmVelZQwef23-MoTFdeuZM5P-4"
             else:
                 self.project_id = None
                 self.measurement_id = None

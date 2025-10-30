@@ -259,7 +259,7 @@ class CompanionRunner(threading.Thread):
             "api_key": HARD_CODED_API_KEY,
             "capture_interval": self.config.get("interval", 10),  # Kept for backward compatibility
             "recording_fps": self.config.get("fps", 1),
-            "analysis_interval": self.config.get("analysis_interval", 10),
+            "analysis_interval": self.config.get("analysis_interval", 40),
             "watch_dirs": self.config.get("watch_dirs", []),
             "always_recent": self.config.get("always_recent", 3),
             "user_id": user_id,
@@ -663,16 +663,24 @@ class OverlayWindow(QWidget):
         chat_layout.setContentsMargins(0, 8, 0, 0)
         chat_layout.setSpacing(8)
 
-        # Buttons: Start/Stop with compact design
+        # Hide button only (recording is now automatic)
         btn_h = QHBoxLayout()
         btn_h.setSpacing(8)
 
-        self.start_btn = QPushButton("Start Recording")
-        self.start_btn.setObjectName("primaryButton")
-        self.start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.start_btn.clicked.connect(self.on_start_stop)
-        self.start_btn.setFixedHeight(32)
-        btn_h.addWidget(self.start_btn, 2)
+        # Recording status label
+        self.recording_status_label = QLabel("🔴 Recording Active")
+        self.recording_status_label.setStyleSheet("""
+            QLabel {
+                color: #10B981;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 8px 12px;
+                background-color: rgba(16, 185, 129, 0.1);
+                border-radius: 6px;
+            }
+        """)
+        self.recording_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_h.addWidget(self.recording_status_label, 2)
 
         self.hide_btn = QPushButton("Hide")
         self.hide_btn.setObjectName("secondaryButton")
@@ -756,69 +764,11 @@ class OverlayWindow(QWidget):
         user_id_h.addStretch()
         settings_layout.addLayout(user_id_h)
 
-        # Analysis Interval spinner with modern styling (renamed from Capture Interval)
-        interval_h = QHBoxLayout()
-        interval_h.setSpacing(16)
-        interval_label = QLabel("Analysis Interval")
-        interval_label.setObjectName("fieldLabel")
-        interval_label.setToolTip("How often to analyze the recorded video (in seconds)")
-        interval_h.addWidget(interval_label)
-
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setObjectName("modernSpinBox")
-        self.interval_spin.setRange(1, 86400)
-        self.interval_spin.setValue(int(self.config.get("analysis_interval", self.config.get("interval", 10))))
-        self.interval_spin.setSuffix(" sec")
-        self.interval_spin.setFixedHeight(38)
-        self.interval_spin.setFixedWidth(125)
-        interval_h.addWidget(self.interval_spin)
-        interval_h.addStretch()
-        settings_layout.addLayout(interval_h)
-
-        # FPS spinner with modern styling
-        fps_h = QHBoxLayout()
-        fps_h.setSpacing(16)
-        fps_label = QLabel("Recording FPS")
-        fps_label.setObjectName("fieldLabel")
-        fps_label.setToolTip("Frames per second for video recording (lower = less cost)")
-        fps_h.addWidget(fps_label)
-
-        self.fps_spin = QSpinBox()
-        self.fps_spin.setObjectName("modernSpinBox")
-        self.fps_spin.setRange(1, 30)
-        self.fps_spin.setValue(int(self.config.get("fps", 1)))
-        self.fps_spin.setSuffix(" FPS")
-        self.fps_spin.setFixedHeight(38)
-        self.fps_spin.setFixedWidth(125)
-        fps_h.addWidget(self.fps_spin)
-        fps_h.addStretch()
-        settings_layout.addLayout(fps_h)
-
-        # QA Model selection with modern styling
-        qa_model_h = QHBoxLayout()
-        qa_model_h.setSpacing(16)
-        qa_model_label = QLabel("QA Model")
-        qa_model_label.setObjectName("fieldLabel")
-        qa_model_label.setToolTip("Model used for answering questions (screenshots always use Gemini)")
-        qa_model_h.addWidget(qa_model_label)
-
-        self.qa_model_combo = QComboBox()
-        self.qa_model_combo.setObjectName("modernComboBox")
-        self.qa_model_combo.addItem("Gemini (Default)", "gemini")
-        self.qa_model_combo.addItem("Claude 4.5 Sonnet", "claude")
-        self.qa_model_combo.setToolTip("Gemini: Free/low-cost, fast\nClaude: Superior reasoning, requires Vertex AI setup")
-
-        # Set current value from config
-        current_qa_model = self.config.get("qa_model", "gemini")
-        index = self.qa_model_combo.findData(current_qa_model)
-        if index >= 0:
-            self.qa_model_combo.setCurrentIndex(index)
-
-        self.qa_model_combo.setFixedHeight(38)
-        self.qa_model_combo.setFixedWidth(200)
-        qa_model_h.addWidget(self.qa_model_combo)
-        qa_model_h.addStretch()
-        settings_layout.addLayout(qa_model_h)
+        # Info label about automatic settings
+        info_label = QLabel("Recording and analysis settings are automatically optimized for best performance and cost efficiency.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #9CA3AF; font-size: 11px; padding: 8px; background-color: rgba(255,255,255,0.03); border-radius: 6px;")
+        settings_layout.addWidget(info_label)
 
         # Watch directories with modern list
         watch_header = QHBoxLayout()
@@ -1564,23 +1514,32 @@ class OverlayWindow(QWidget):
         return {
             "api_key": "",  # API key is hardcoded, not editable
             "user_id": self.user_id_display.text().strip() or "default_user",
-            "interval": int(self.interval_spin.value()),  # Kept for backward compatibility
-            "analysis_interval": int(self.interval_spin.value()),
-            "fps": int(self.fps_spin.value()),
+            "interval": 40,  # Fixed optimal value for backward compatibility
+            "analysis_interval": 40,  # Fixed optimal value
+            "fps": 1,  # Fixed optimal value
             "watch_dirs": watch_dirs,
             "always_recent": self.config.get("always_recent", 3),
-            "qa_model": self.qa_model_combo.currentData(),
+            "qa_model": "gemini",  # Fixed to Gemini
             "onboarding_completed": self.config.get("onboarding_completed", False)
         }
 
-    def on_start_stop(self):
+    def auto_start_recording(self):
+        """Auto-start recording when app is active and authenticated"""
         if not self._is_recording:
-            # send START
             _to_companion_q.put(("START", None))
-            self.signals.log.emit("Requested start.")
-        else:
-            _to_companion_q.put(("STOP", None))
-            self.signals.log.emit("Requested stop.")
+            self.signals.log.emit("🔴 Auto-started recording...")
+            self._is_recording = True
+            self.recording_status_label.setText("🔴 Recording Active")
+            self.recording_status_label.setStyleSheet("""
+                QLabel {
+                    color: #10B981;
+                    font-size: 12px;
+                    font-weight: 600;
+                    padding: 8px 12px;
+                    background-color: rgba(16, 185, 129, 0.1);
+                    border-radius: 6px;
+                }
+            """)
 
     def update_chat_enabled_state(self):
         """Enable or disable chat based on authentication status"""
@@ -1589,15 +1548,28 @@ class OverlayWindow(QWidget):
         # Enable/disable chat input and button
         self.ask_edit.setEnabled(is_authenticated)
         self.ask_btn.setEnabled(is_authenticated)
-        self.start_btn.setEnabled(is_authenticated)
 
         # Update placeholder text
         if not is_authenticated:
             self.ask_edit.setPlaceholderText("Sign in to use chat")
             self.response_area.setPlaceholderText("Please sign in to your Google account to use chat features")
+            self.recording_status_label.setText("⚠️ Not Recording - Sign in required")
+            self.recording_status_label.setStyleSheet("""
+                QLabel {
+                    color: #F59E0B;
+                    font-size: 12px;
+                    font-weight: 600;
+                    padding: 8px 12px;
+                    background-color: rgba(245, 158, 11, 0.1);
+                    border-radius: 6px;
+                }
+            """)
         else:
             self.ask_edit.setPlaceholderText("Ask Anything")
             self.response_area.setPlaceholderText("")
+            # Auto-start recording when authenticated
+            if not self._is_recording:
+                self.auto_start_recording()
 
     def on_ask(self):
         # Check authentication before allowing chat
@@ -2032,42 +2004,38 @@ class OverlayWindow(QWidget):
             print(f"🔔 Queue received message type: {typ}")
             if typ == "STARTED":
                 self._is_recording = True
-                self.start_btn.setText("Stop Recording")
-                self.start_btn.setObjectName("stopButton")
-                self.start_btn.setStyleSheet("""
-                    #stopButton {
-                        background: qlineargradient(
-                            x1:0, y1:0, x2:1, y2:0,
-                            stop:0 #EF4444,
-                            stop:1 #DC2626
-                        );
-                        color: white;
-                        border: none;
-                        border-radius: 10px;
+                self.recording_status_label.setText("🔴 Recording Active")
+                self.recording_status_label.setStyleSheet("""
+                    QLabel {
+                        color: #10B981;
+                        font-size: 12px;
                         font-weight: 600;
-                        font-size: 13px;
-                        padding: 0 20px;
-                    }
-                    #stopButton:hover {
-                        background: qlineargradient(
-                            x1:0, y1:0, x2:1, y2:0,
-                            stop:0 #DC2626,
-                            stop:1 #B91C1C
-                        );
-                    }
-                    #stopButton:pressed {
-                        background: #991B1B;
+                        padding: 8px 12px;
+                        background-color: rgba(16, 185, 129, 0.1);
+                        border-radius: 6px;
                     }
                 """)
                 self.signals.status.emit("Recording")
                 self.signals.log.emit(str(payload))
             elif typ == "STOPPED":
+                # Recording should always be active - if stopped, restart it
                 self._is_recording = False
-                self.start_btn.setText("Start Recording")
-                self.start_btn.setObjectName("primaryButton")
-                self.start_btn.setStyleSheet("")  # Reset to default
-                self.signals.status.emit("Idle")
+                self.recording_status_label.setText("⚠️ Recording Paused")
+                self.recording_status_label.setStyleSheet("""
+                    QLabel {
+                        color: #F59E0B;
+                        font-size: 12px;
+                        font-weight: 600;
+                        padding: 8px 12px;
+                        background-color: rgba(245, 158, 11, 0.1);
+                        border-radius: 6px;
+                    }
+                """)
+                self.signals.status.emit("Paused")
                 self.signals.log.emit(str(payload))
+                # Auto-restart if authenticated
+                if self.firebase_auth and self.firebase_auth.is_authenticated():
+                    QTimer.singleShot(1000, self.auto_start_recording)
             elif typ == "RESPONSE":
                 # Handle structured response (dict with display/gemini_raw) or plain string
                 if isinstance(payload, dict) and "display" in payload:
@@ -2231,10 +2199,59 @@ def main():
     config = load_config()
     app = QApplication(sys.argv)
 
-    # Show onboarding for first-time users
-    if not config.get("onboarding_completed", False):
+    # Initialize Firebase Auth first
+    firebase_auth = None
+    if FIREBASE_AVAILABLE:
+        try:
+            config_path = Path("firebase_config.json")
+            if config_path.exists():
+                firebase_auth = FirebaseAuth(config_file="firebase_config.json", persist_auth=True)
+                print("✅ Firebase Auth initialized")
+            else:
+                print("❌ Firebase config not found. Authentication required!")
+                QMessageBox.critical(
+                    None,
+                    "Configuration Error",
+                    "firebase_config.json not found. Please contact support or check installation."
+                )
+                sys.exit(1)
+        except Exception as e:
+            print(f"❌ Failed to initialize Firebase Auth: {e}")
+            QMessageBox.critical(
+                None,
+                "Authentication Error",
+                f"Failed to initialize authentication: {e}"
+            )
+            sys.exit(1)
+    else:
+        QMessageBox.critical(
+            None,
+            "Missing Dependencies",
+            "Firebase authentication libraries not installed. Please contact support."
+        )
+        sys.exit(1)
+
+    # Initialize GitHub Auth
+    github_auth = None
+    if GITHUB_AVAILABLE:
+        try:
+            github_auth = get_github_auth()
+            print("✅ GitHub Auth initialized")
+        except Exception as e:
+            print(f"⚠️ GitHub Auth initialization warning: {e}")
+
+    # Check if onboarding is needed OR if user is not authenticated
+    needs_onboarding = not config.get("onboarding_completed", False)
+    is_authenticated = firebase_auth and firebase_auth.is_authenticated()
+
+    # Show onboarding if needed or not authenticated (no blocking dialogs)
+    if needs_onboarding or not is_authenticated:
         from onboarding import OnboardingDialog
-        onboarding = OnboardingDialog()
+
+        onboarding = OnboardingDialog(
+            firebase_auth=firebase_auth,
+            github_auth=github_auth
+        )
         result = onboarding.exec()
 
         if result == OnboardingDialog.DialogCode.Accepted:
@@ -2242,6 +2259,21 @@ def main():
             config["onboarding_completed"] = True
             save_config_to_file(config)
             print("[OK] Onboarding completed")
+        else:
+            # User cancelled onboarding - exit app
+            print("[INFO] User cancelled onboarding. Exiting.")
+            sys.exit(0)
+
+        # Verify authentication after onboarding
+        if not firebase_auth.is_authenticated():
+            print("[ERROR] Authentication failed. Exiting.")
+            sys.exit(1)
+
+    # Log GitHub status (no blocking dialog)
+    if github_auth and github_auth.is_authenticated():
+        print("✅ GitHub connected")
+    else:
+        print("ℹ️ GitHub not connected - some features will be limited")
 
     w = OverlayWindow(config)
 
