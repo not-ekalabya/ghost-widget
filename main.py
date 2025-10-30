@@ -53,6 +53,14 @@ except Exception as e:
     GITHUB_AVAILABLE = False
     _github_import_error = str(e)
 
+# Import Firestore Chat Manager
+try:
+    from firestore_chat import FirestoreChatManager
+    FIRESTORE_CHAT_AVAILABLE = True
+except Exception as e:
+    FIRESTORE_CHAT_AVAILABLE = False
+    _firestore_chat_import_error = str(e)
+
 USE_PYQT6 = True
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -530,6 +538,16 @@ class OverlayWindow(QWidget):
         self.github_auth = None
         self._init_github_auth()
 
+        # Firestore Chat Manager instance
+        self.chat_manager = None
+        self._init_chat_manager()
+
+        # Track current question for saving to Firestore
+        self.current_question = None
+
+        # Store conversation context for continuing chats
+        self.conversation_context = None
+
         self.init_ui()
         self.start_polling_companion_queue()
         self.start_auth_token_refresh_timer()
@@ -586,6 +604,23 @@ class OverlayWindow(QWidget):
             print(f"Failed to initialize GitHub Auth: {e}")
             self._pending_github_restore = None
 
+    def _init_chat_manager(self):
+        """Initialize Firestore Chat Manager"""
+        if not FIRESTORE_CHAT_AVAILABLE:
+            print("Firestore Chat Manager not available")
+            return
+
+        try:
+            self.chat_manager = FirestoreChatManager()
+            if self.chat_manager.is_available():
+                print("✅ Firestore Chat Manager initialized successfully")
+            else:
+                print("⚠️ Firestore Chat Manager initialized but not available")
+        except Exception as e:
+            print(f"❌ Failed to initialize Firestore Chat Manager: {e}")
+            import traceback
+            traceback.print_exc()
+
     def update_github_ui_state(self, username):
         """Update GitHub UI to show authenticated state"""
         if hasattr(self, 'github_signin_btn') and hasattr(self, 'github_user_lbl'):
@@ -593,6 +628,263 @@ class OverlayWindow(QWidget):
             self.github_signin_btn.setText("✓ Connected to GitHub")
             self.github_user_lbl.setText(f"Connected as: {username}")
             self.github_user_lbl.setStyleSheet("color: #10B981; font-size: 11px; margin-top: 8px;")
+
+    def _save_chat_to_firestore(self, response_text: str):
+        """Save chat conversation to Firestore"""
+        # Check if we have all required components
+        if not self.chat_manager or not self.chat_manager.is_available():
+            print("⚠️ Chat manager not available, skipping Firestore save")
+            return
+
+        if not self.firebase_auth or not self.firebase_auth.is_authenticated():
+            print("⚠️ User not authenticated, skipping Firestore save")
+            return
+
+        if not self.current_question:
+            print("⚠️ No current question to save")
+            return
+
+        # Get user ID
+        user_id = self.firebase_auth.get_user_id()
+        if not user_id:
+            print("⚠️ Could not get user ID, skipping Firestore save")
+            return
+
+        # Save to Firestore in background thread to avoid blocking UI
+        def save_in_background():
+            try:
+                result = self.chat_manager.save_chat(
+                    user_id=user_id,
+                    message=self.current_question,
+                    response=response_text,
+                    message_type="question",
+                    metadata={
+                        "email": self.firebase_auth.get_user_email(),
+                        "display_name": self.firebase_auth.get_user_display_name()
+                    },
+                    conversation_context=self.conversation_context
+                )
+                if result["success"]:
+                    print(f"✅ Chat saved to Firestore: {result['document_id']}")
+                else:
+                    print(f"❌ Failed to save chat: {result['message']}")
+            except Exception as e:
+                print(f"❌ Error saving chat to Firestore: {e}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                # Clear the current question
+                self.current_question = None
+
+        # Run in background thread
+        threading.Thread(target=save_in_background, daemon=True).start()
+
+    def retrieve_user_chats(self, limit: int = 10):
+        """Retrieve and display user's chat history from Firestore"""
+        # Check if we have all required components
+        if not self.chat_manager or not self.chat_manager.is_available():
+            self.signals.log.emit("<span style='color: #EF4444;'>⚠️ Chat manager not available</span>")
+            return
+
+        if not self.firebase_auth or not self.firebase_auth.is_authenticated():
+            self.signals.log.emit("<span style='color: #EF4444;'>⚠️ Please sign in to view chat history</span>")
+            return
+
+        # Get user ID
+        user_id = self.firebase_auth.get_user_id()
+        if not user_id:
+            self.signals.log.emit("<span style='color: #EF4444;'>⚠️ Could not get user ID</span>")
+            return
+
+        # Retrieve chats in background thread
+        def retrieve_in_background():
+            try:
+                result = self.chat_manager.retrieve_chats(user_id=user_id, limit=limit)
+                if result["success"]:
+                    chats = result["chats"]
+                    self.signals.log.emit(f"<span style='color: #10B981;'>✅ Retrieved {len(chats)} chats</span>")
+
+                    # Display chats in response area
+                    if chats:
+                        chat_display = f"### Your Recent Chats ({len(chats)} total)\n\n"
+                        for i, chat in enumerate(chats, 1):
+                            created_at = chat.get("created_at", "Unknown time")
+                            message = chat.get("message", "")
+                            response = chat.get("response", "")
+                            chat_display += f"**Chat {i}** - {created_at}\n\n"
+                            chat_display += f"**Q:** {message}\n\n"
+                            chat_display += f"**A:** {response[:200]}{'...' if len(response) > 200 else ''}\n\n"
+                            chat_display += "---\n\n"
+
+                        self.signals.response.emit(chat_display)
+                    else:
+                        self.signals.response.emit("No chat history found.")
+                else:
+                    self.signals.log.emit(f"<span style='color: #EF4444;'>❌ {result['message']}</span>")
+            except Exception as e:
+                self.signals.log.emit(f"<span style='color: #EF4444;'>❌ Error retrieving chats: {str(e)}</span>")
+                import traceback
+                traceback.print_exc()
+
+        # Run in background thread
+        threading.Thread(target=retrieve_in_background, daemon=True).start()
+
+    def load_chat_history(self):
+        """Load chat history into the history list widget"""
+        if not self.chat_manager or not self.chat_manager.is_available():
+            self.signals.log.emit("<span style='color: #EF4444;'>⚠️ Chat manager not available</span>")
+            return
+
+        if not self.firebase_auth or not self.firebase_auth.is_authenticated():
+            self.signals.log.emit("<span style='color: #EF4444;'>⚠️ Please sign in to view chat history</span>")
+            return
+
+        user_id = self.firebase_auth.get_user_id()
+        if not user_id:
+            self.signals.log.emit("<span style='color: #EF4444;'>⚠️ Could not get user ID</span>")
+            return
+
+        # Clear current list
+        self.history_list.clear()
+        self.signals.log.emit("<span style='color: #60A5FA;'>🔄 Loading chat history...</span>")
+
+        # Load chats in background
+        def load_in_background():
+            try:
+                result = self.chat_manager.retrieve_chats(user_id=user_id, limit=50)
+                if result["success"]:
+                    chats = result["chats"]
+                    # Send chats to UI thread for display
+                    _from_companion_q.put(("CHAT_HISTORY_LOADED", chats))
+                else:
+                    self.signals.log.emit(f"<span style='color: #EF4444;'>❌ {result['message']}</span>")
+            except Exception as e:
+                self.signals.log.emit(f"<span style='color: #EF4444;'>❌ Error loading history: {str(e)}</span>")
+                import traceback
+                traceback.print_exc()
+
+        threading.Thread(target=load_in_background, daemon=True).start()
+
+    def display_chat_history(self, chats):
+        """Display loaded chats in the history list"""
+        self.history_list.clear()
+
+        if not chats:
+            item = QListWidgetItem("No chat history found")
+            item.setData(Qt.ItemDataRole.UserRole, None)
+            self.history_list.addItem(item)
+            self.signals.log.emit("<span style='color: #9CA3AF;'>No chat history found</span>")
+            return
+
+        self.signals.log.emit(f"<span style='color: #10B981;'>✅ Loaded {len(chats)} chats</span>")
+
+        for chat in chats:
+            message = chat.get("message", "")
+            response = chat.get("response", "")
+            created_at = chat.get("created_at", "Unknown time")
+            doc_id = chat.get("document_id", "")
+
+            # Format timestamp (just date and time)
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                time_str = dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                time_str = created_at[:16] if len(created_at) > 16 else created_at
+
+            # Create list item with preview
+            preview = message[:60] + "..." if len(message) > 60 else message
+            item_text = f"📝 {time_str}\n{preview}"
+
+            item = QListWidgetItem(item_text)
+            # Store full chat data in item
+            item.setData(Qt.ItemDataRole.UserRole, chat)
+            self.history_list.addItem(item)
+
+    def load_selected_chat(self):
+        """Load the selected chat into the chat tab"""
+        selected_items = self.history_list.selectedItems()
+        if not selected_items:
+            self.signals.log.emit("<span style='color: #F59E0B;'>⚠️ Please select a chat to load</span>")
+            return
+
+        chat_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        if not chat_data:
+            return
+
+        # Display the chat in the response area
+        message = chat_data.get("message", "")
+        response = chat_data.get("response", "")
+        created_at = chat_data.get("created_at", "")
+
+        # Format the chat display
+        chat_display = f"### 📜 Previous Conversation\n\n"
+        chat_display += f"**Date:** {created_at}\n\n"
+        chat_display += f"**Your Question:**\n{message}\n\n"
+        chat_display += f"**Response:**\n{response}\n\n"
+        chat_display += "---\n\n"
+        chat_display += "*You can now ask a follow-up question to continue this conversation.*"
+
+        self.response_area.clear_messages()
+        self.signals.response.emit(chat_display)
+
+        # Switch to Chat tab
+        self.tabs.setCurrentIndex(0)
+
+        # Store conversation context for follow-up
+        self.conversation_context = {
+            "previous_message": message,
+            "previous_response": response,
+            "document_id": chat_data.get("document_id", "")
+        }
+
+        self.signals.log.emit("<span style='color: #10B981;'>✅ Chat loaded. Ask a follow-up question to continue.</span>")
+
+    def on_history_item_double_clicked(self, item):
+        """Handle double-click on history item"""
+        self.load_selected_chat()
+
+    def delete_selected_chat(self):
+        """Delete the selected chat from Firestore"""
+        selected_items = self.history_list.selectedItems()
+        if not selected_items:
+            self.signals.log.emit("<span style='color: #F59E0B;'>⚠️ Please select a chat to delete</span>")
+            return
+
+        chat_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        if not chat_data:
+            return
+
+        doc_id = chat_data.get("document_id", "")
+        if not doc_id:
+            self.signals.log.emit("<span style='color: #EF4444;'>❌ Cannot delete: missing document ID</span>")
+            return
+
+        # Confirm deletion
+        message = chat_data.get("message", "")[:50]
+        reply = QMessageBox.question(
+            self,
+            "Delete Chat",
+            f"Are you sure you want to delete this chat?\n\n\"{message}...\"",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            # Delete in background
+            def delete_in_background():
+                try:
+                    result = self.chat_manager.delete_chat(doc_id)
+                    if result["success"]:
+                        self.signals.log.emit("<span style='color: #10B981;'>✅ Chat deleted successfully</span>")
+                        # Reload history
+                        self.load_chat_history()
+                    else:
+                        self.signals.log.emit(f"<span style='color: #EF4444;'>❌ {result['message']}</span>")
+                except Exception as e:
+                    self.signals.log.emit(f"<span style='color: #EF4444;'>❌ Error deleting chat: {str(e)}</span>")
+
+            threading.Thread(target=delete_in_background, daemon=True).start()
 
     def init_ui(self):
         self.setWindowTitle("Ghost Widget")
@@ -737,6 +1029,92 @@ class OverlayWindow(QWidget):
 
         # Add chat tab
         self.tabs.addTab(chat_tab, "Chat")
+
+        # === HISTORY TAB ===
+        history_tab = QWidget()
+        history_layout = QVBoxLayout(history_tab)
+        history_layout.setContentsMargins(0, 16, 0, 0)
+        history_layout.setSpacing(12)
+
+        # Header with refresh button
+        history_header_h = QHBoxLayout()
+        history_header_h.setSpacing(10)
+
+        history_lbl = QLabel("CHAT HISTORY")
+        history_lbl.setObjectName("sectionLabel")
+        history_header_h.addWidget(history_lbl)
+
+        history_header_h.addStretch()
+
+        self.refresh_history_btn = QPushButton("🔄 Refresh")
+        self.refresh_history_btn.setObjectName("secondaryButton")
+        self.refresh_history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refresh_history_btn.clicked.connect(self.load_chat_history)
+        self.refresh_history_btn.setFixedHeight(32)
+        self.refresh_history_btn.setFixedWidth(100)
+        history_header_h.addWidget(self.refresh_history_btn)
+
+        history_layout.addLayout(history_header_h)
+
+        # Info label
+        history_info_lbl = QLabel("View and continue your previous conversations")
+        history_info_lbl.setObjectName("subtleLabel")
+        history_info_lbl.setStyleSheet("color: #9CA3AF; font-size: 11px; margin-bottom: 8px;")
+        history_layout.addWidget(history_info_lbl)
+
+        # Chat history list
+        self.history_list = QListWidget()
+        self.history_list.setObjectName("modernList")
+        self.history_list.itemDoubleClicked.connect(self.on_history_item_double_clicked)
+        self.history_list.setStyleSheet("""
+            QListWidget#modernList {
+                background-color: rgba(0, 0, 0, 0.2);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 8px;
+                padding: 8px;
+                color: #E5E7EB;
+                font-size: 12px;
+            }
+            QListWidget#modernList::item {
+                background-color: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 6px;
+                padding: 12px;
+                margin-bottom: 8px;
+            }
+            QListWidget#modernList::item:hover {
+                background-color: rgba(255, 255, 255, 0.1);
+                border-color: rgba(96, 165, 250, 0.5);
+            }
+            QListWidget#modernList::item:selected {
+                background-color: rgba(96, 165, 250, 0.2);
+                border-color: #60A5FA;
+            }
+        """)
+        history_layout.addWidget(self.history_list)
+
+        # Action buttons
+        history_actions_h = QHBoxLayout()
+        history_actions_h.setSpacing(8)
+
+        self.load_chat_btn = QPushButton("📖 Load Chat")
+        self.load_chat_btn.setObjectName("accentButton")
+        self.load_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.load_chat_btn.clicked.connect(self.load_selected_chat)
+        self.load_chat_btn.setFixedHeight(36)
+        history_actions_h.addWidget(self.load_chat_btn)
+
+        self.delete_chat_btn = QPushButton("🗑️ Delete")
+        self.delete_chat_btn.setObjectName("secondaryButton")
+        self.delete_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.delete_chat_btn.clicked.connect(self.delete_selected_chat)
+        self.delete_chat_btn.setFixedHeight(36)
+        history_actions_h.addWidget(self.delete_chat_btn)
+
+        history_layout.addLayout(history_actions_h)
+
+        # Add history tab
+        self.tabs.addTab(history_tab, "History")
 
         # === SETTINGS TAB ===
         settings_tab = QWidget()
@@ -1580,11 +1958,32 @@ class OverlayWindow(QWidget):
         if not q:
             return
 
+        # If there's conversation context, include it in the question
+        enhanced_question = q
+        if self.conversation_context:
+            context_info = (
+                f"\n\n[Context from previous conversation]\n"
+                f"Previous question: {self.conversation_context['previous_message']}\n"
+                f"Previous response: {self.conversation_context['previous_response'][:200]}...\n"
+                f"[End of context]\n\n"
+                f"Follow-up question: {q}"
+            )
+            enhanced_question = context_info
+
+        # Store the original question for later saving with the response
+        self.current_question = q
+
         # Include guidance mode status with the question
         guidance_mode = self.guidance_mode_checkbox.isChecked()
-        _to_companion_q.put(("ASK", {"question": q, "guidance_mode": guidance_mode}))
+        _to_companion_q.put(("ASK", {"question": enhanced_question, "guidance_mode": guidance_mode}))
         # optionally clear input
         self.ask_edit.clear()
+
+        # Clear conversation context after sending follow-up
+        # (so next question is fresh unless user loads another chat)
+        if self.conversation_context:
+            self.signals.log.emit("<span style='color: #60A5FA;'>💬 Continuing previous conversation...</span>")
+            self.conversation_context = None
 
     def on_github_signin(self):
         """Handle GitHub Sign-In via OAuth Device Flow"""
@@ -2038,10 +2437,16 @@ class OverlayWindow(QWidget):
                     QTimer.singleShot(1000, self.auto_start_recording)
             elif typ == "RESPONSE":
                 # Handle structured response (dict with display/gemini_raw) or plain string
+                response_text = ""
                 if isinstance(payload, dict) and "display" in payload:
-                    self.signals.response.emit(payload["display"])
+                    response_text = payload["display"]
+                    self.signals.response.emit(response_text)
                 else:
-                    self.signals.response.emit(str(payload))
+                    response_text = str(payload)
+                    self.signals.response.emit(response_text)
+
+                # Save chat to Firestore
+                self._save_chat_to_firestore(response_text)
             elif typ == "ERROR":
                 self.signals.log.emit("<span style='color: #EF4444;'>[ERROR]</span> " + str(payload))
             elif typ == "CONFIG_UPDATED":
@@ -2107,6 +2512,10 @@ class OverlayWindow(QWidget):
                     self.signals.log.emit(f"<span style='color: #EF4444;'>Google Sign-In failed: {result['message']}</span>")
                     self.google_signin_btn.setEnabled(True)
                     self.google_signin_btn.setText("🔐 Sign in with Google")
+            elif typ == "CHAT_HISTORY_LOADED":
+                # Handle chat history loaded from Firestore
+                chats = payload
+                self.display_chat_history(chats)
             elif typ == "MEMORIES_LIST":
                 # Handle memories list response
                 memories = payload
