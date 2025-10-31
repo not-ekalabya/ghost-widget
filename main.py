@@ -188,7 +188,7 @@ def format_progress_html(event_type, data):
             html += f"<span style='color: #52525B; font-size: 10px; margin-left: 20px;'>{marker} {ts}</span><br>"
         return html
     elif event_type == "AI_PROCESSING":
-        return f"<span style='color: #60A5FA; font-size: 11px;'>💬 AI processing...</span>"
+        return f"<span style='color: #60A5FA; font-size: 11px;'>💬 Ghost processing...</span>"
     elif event_type == "TOOL_EXECUTE":
         tool_name = data['tool_name']
         icon = icon_map.get(tool_name, "🔧")
@@ -879,9 +879,10 @@ class OverlayWindow(QWidget):
             except:
                 time_str = created_at[:16] if len(created_at) > 16 else created_at
 
-            # Create list item with preview
-            preview = message[:60] + "..." if len(message) > 60 else message
-            item_text = f"📝 {time_str}\n{preview}"
+            # Create list item with preview of both question and answer
+            question_preview = message[:50] + "..." if len(message) > 50 else message
+            response_preview = response[:50] + "..." if len(response) > 50 else response
+            item_text = f"📝 {time_str}\nQ: {question_preview}\nA: {response_preview}"
 
             item = QListWidgetItem(item_text)
             # Store full chat data in item
@@ -1011,7 +1012,7 @@ class OverlayWindow(QWidget):
         if logo_path.exists():
             from PyQt6.QtGui import QPixmap
             pixmap = QPixmap(str(logo_path))
-            scaled_pixmap = pixmap.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            scaled_pixmap = pixmap.scaled(35, 35, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             logo_label.setPixmap(scaled_pixmap)
             title_h.addWidget(logo_label)
 
@@ -2084,6 +2085,23 @@ class OverlayWindow(QWidget):
 
         # Store the original question for later saving with the response
         self.current_question = q
+
+        # Display the user's question in the chat area
+        import time
+        ts = time.strftime("%H:%M:%S")
+        question_html = (
+            f"<div style='margin: 16px 0;'>"
+            f"<div style='color: #9CA3AF; font-size: 10px; font-weight: 600; text-transform: uppercase; "
+            f"letter-spacing: 1px; margin-bottom: 8px;'>YOU [{ts}]</div>"
+            f"<div style='color: #E5E7EB; font-size: 13px; line-height: 1.6;'>{q}</div>"
+            f"</div>"
+        )
+        self.response_area.append(question_html)
+
+        # Auto-scroll to show the question
+        cursor = self.response_area.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.response_area.setTextCursor(cursor)
 
         # Include guidance mode status with the question
         guidance_mode = self.guidance_mode_checkbox.isChecked()
