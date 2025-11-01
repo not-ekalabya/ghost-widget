@@ -71,7 +71,26 @@ class UpdateChecker:
             response = requests.get(self.update_url, headers=headers, timeout=timeout)
 
             if response.status_code != 200:
-                print(f"⚠️ Failed to check for updates: HTTP {response.status_code}")
+                error_msg = f"⚠️ Failed to check for updates: HTTP {response.status_code}"
+
+                # Provide helpful messages for common errors
+                if response.status_code == 404:
+                    try:
+                        error_data = response.json()
+                        if 'message' in error_data and 'Not Found' in error_data['message']:
+                            error_msg += "\n💡 No releases found. Please create a release on GitHub:"
+                            error_msg += f"\n   1. Go to https://github.com/{self.github_repo}/releases/new"
+                            error_msg += f"\n   2. Tag version: v{self.current_version}"
+                            error_msg += "\n   3. Upload Ghost.exe as an asset"
+                            error_msg += "\n   4. Publish the release"
+                    except:
+                        pass
+                elif response.status_code == 403:
+                    error_msg += "\n💡 GitHub API rate limit exceeded or invalid token"
+                elif response.status_code == 401:
+                    error_msg += "\n💡 Invalid GitHub token. Check updater.py line 39"
+
+                print(error_msg)
                 return None
 
             release_data = response.json()

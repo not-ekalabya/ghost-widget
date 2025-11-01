@@ -65,11 +65,13 @@ except Exception as e:
 # Import Auto-updater
 try:
     from updater import UpdateChecker, check_for_updates_background
-    from version import __version__
+    from version import __version__, GITHUB_REPO, UPDATE_CHECK_URL
     UPDATER_AVAILABLE = True
 except Exception as e:
     UPDATER_AVAILABLE = False
     __version__ = "1.0.0"
+    GITHUB_REPO = "not-configured"
+    UPDATE_CHECK_URL = "not-configured"
     _updater_import_error = str(e)
 
 USE_PYQT6 = True
@@ -581,9 +583,8 @@ class OverlayWindow(QWidget):
         self.start_auth_token_refresh_timer()
 
         # Check for updates on startup (in background)
-        # Commented out until GitHub repository is created and first release is published
-        # if UPDATER_AVAILABLE:
-        #     self._check_for_updates_on_startup()
+        if UPDATER_AVAILABLE:
+            self._check_for_updates_on_startup()
 
     def _init_firebase_auth(self):
         """Initialize Firebase Auth if config file exists"""
@@ -1056,7 +1057,7 @@ class OverlayWindow(QWidget):
         # self.status_dot.setStyleSheet("color: #6B7280; font-size: 16px;")
         # title_h.addWidget(self.status_dot)
 
-        title_lbl = QLabel("Ghost - Update Test 2")
+        title_lbl = QLabel("Ghost - Update Test Final")
         title_lbl.setObjectName("titleLabel")
         title_font = QFont()
         title_font.setPointSize(15)
@@ -2366,11 +2367,19 @@ class OverlayWindow(QWidget):
             return
 
         self._log_update_event("info", "Manual update check initiated...")
+        self._log_update_event("info", f"Checking: {UPDATE_CHECK_URL}")
         self.signals.log.emit("<span style='color: #60A5FA;'>🔍 Checking for updates...</span>")
 
         def on_update_check_complete(update_info):
             if update_info is None:
-                self._log_update_event("error", "Failed to check for updates (network error or API failure)")
+                self._log_update_event("error", "Failed to check for updates - No releases found")
+                self._log_update_event("info", "📝 Setup Instructions:")
+                self._log_update_event("info", f"1. Visit: https://github.com/{GITHUB_REPO}/releases/new")
+                self._log_update_event("info", f"2. Create tag: v{__version__}")
+                self._log_update_event("info", "3. Build: pyinstaller main.spec")
+                self._log_update_event("info", "4. Upload: dist\\Ghost.exe")
+                self._log_update_event("info", "5. Click 'Publish release'")
+                self._log_update_event("info", "See SETUP_AUTO_UPDATES.md for detailed guide")
                 _from_companion_q.put(("UPDATE_CHECK_FAILED", None))
             elif update_info.get('available'):
                 self._log_update_event("success", f"Update available: v{update_info['version']}")
@@ -2384,11 +2393,17 @@ class OverlayWindow(QWidget):
     def _check_for_updates_on_startup(self):
         """Check for updates in background on app startup"""
         self._log_update_event("info", "Checking for updates on startup...")
+        self._log_update_event("info", f"Update URL: {UPDATE_CHECK_URL}")
 
         def on_update_check_complete(update_info):
             # This will be called from background thread, so emit signal to update UI
             if update_info is None:
-                self._log_update_event("warning", "Update check failed (network error or API failure)")
+                self._log_update_event("error", "Update check failed - No releases found on GitHub")
+                self._log_update_event("info", "To enable auto-updates:")
+                self._log_update_event("info", f"1. Go to https://github.com/{GITHUB_REPO}/releases/new")
+                self._log_update_event("info", f"2. Create release with tag: v{__version__}")
+                self._log_update_event("info", "3. Upload Ghost.exe as an asset")
+                self._log_update_event("info", "4. Publish the release")
             elif update_info.get('available'):
                 self._log_update_event("success", f"Update found: v{update_info['version']}")
                 # Show update notification in UI thread via queue
