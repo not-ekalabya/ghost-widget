@@ -19,7 +19,9 @@
       "Bash(dir:*)",
       "Bash(echo:*)",
       "Bash(timeout:*)",
-      "Bash(ping:*)"
+      "Bash(ping:*)",
+      "Bash(pip show:*)",
+      "Bash(pyinstaller:*)"
     ],
     "deny": [],
     "ask": []

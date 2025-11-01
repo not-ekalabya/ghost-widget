@@ -3710,13 +3710,30 @@ Provide clear, concise, step-by-step guidance. Use your tools to access real inf
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Check if we have any contexts
+        # Check if we have any contexts in local DB
         cursor.execute('SELECT COUNT(*) FROM context_snapshots')
         count = cursor.fetchone()[0]
         conn.close()
 
-        if count == 0:
+        # Also check mem0 if available
+        mem0_count = 0
+        if count == 0 and self.use_mem0 and self.mem0_client:
+            try:
+                filters = {"user_id": self.user_id}
+                mem0_result = self.mem0_client.get_all(filters=filters)
+                if isinstance(mem0_result, dict) and 'results' in mem0_result:
+                    mem0_count = len(mem0_result['results'])
+                elif isinstance(mem0_result, list):
+                    mem0_count = len(mem0_result)
+            except Exception as e:
+                print(f"⚠️ Error checking mem0 memories: {e}")
+
+        if count == 0 and mem0_count == 0:
             return "No context stored yet. Start capturing first!"
+
+        # Use mem0 count if local DB is empty
+        if count == 0 and mem0_count > 0:
+            count = mem0_count
 
         print(f"\n{'='*60}")
         print("🤖 PROCESSING YOUR QUESTION")
@@ -4076,13 +4093,30 @@ User Question: {question}"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Check if we have any contexts
+        # Check if we have any contexts in local DB
         cursor.execute('SELECT COUNT(*) FROM context_snapshots')
         count = cursor.fetchone()[0]
         conn.close()
 
-        if count == 0:
+        # Also check mem0 if available
+        mem0_count = 0
+        if count == 0 and self.use_mem0 and self.mem0_client:
+            try:
+                filters = {"user_id": self.user_id}
+                mem0_result = self.mem0_client.get_all(filters=filters)
+                if isinstance(mem0_result, dict) and 'results' in mem0_result:
+                    mem0_count = len(mem0_result['results'])
+                elif isinstance(mem0_result, list):
+                    mem0_count = len(mem0_result)
+            except Exception as e:
+                print(f"⚠️ Error checking mem0 memories: {e}")
+
+        if count == 0 and mem0_count == 0:
             return "No context stored yet. Start capturing first!"
+
+        # Use mem0 count if local DB is empty
+        if count == 0 and mem0_count > 0:
+            count = mem0_count
 
         print(f"\n{'='*60}")
         print("🤖 PROCESSING YOUR QUESTION WITH CLAUDE 4.5 SONNET")

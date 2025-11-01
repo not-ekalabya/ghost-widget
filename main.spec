@@ -35,6 +35,12 @@ try:
 except:
     pass
 
+# Collect mem0 data files
+try:
+    datas += collect_data_files('mem0')
+except:
+    pass
+
 # Hidden imports - all required modules
 hiddenimports = [
     # Core modules
@@ -84,8 +90,26 @@ hiddenimports = [
     # Anthropic/Claude
     'anthropic',
 
-    # Mem0
+    # Mem0 (mem0ai package) and its dependencies
     'mem0',
+    'mem0.client',
+    'mem0.memory',
+    'mem0.configs',
+    'mem0.embeddings',
+    'mem0.llms',
+    'mem0.vector_stores',
+    'mem0.graphs',
+    'mem0.utils',
+    'mem0.proxy',
+    'mem0.reranker',
+    'openai',
+    'posthog',
+    'protobuf',
+    'pydantic',
+    'pydantic_core',
+    'pytz',
+    'qdrant_client',
+    'sqlalchemy',
 
     # Analytics
     'google.analytics.data',
@@ -105,6 +129,10 @@ try:
     hiddenimports += collect_submodules('google.generativeai')
     hiddenimports += collect_submodules('firebase_admin')
     hiddenimports += collect_submodules('google.cloud.firestore')
+    hiddenimports += collect_submodules('mem0')
+    hiddenimports += collect_submodules('openai')
+    hiddenimports += collect_submodules('qdrant_client')
+    hiddenimports += collect_submodules('pydantic')
 except:
     pass
 

@@ -77,6 +77,16 @@ HOTKEY_COMBO = "<ctrl>+<alt>+`"   # you can change this to whatever you want
 
 _hotkey_queue = Queue()
 
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
 def convert_markdown_to_html(text):
     """Convert markdown text to HTML with proper styling."""
     if MARKDOWN_AVAILABLE:
@@ -566,25 +576,34 @@ class OverlayWindow(QWidget):
             return
 
         try:
-            config_path = Path("firebase_config.json")
-            if config_path.exists():
-                self.firebase_auth = FirebaseAuth(config_file="firebase_config.json", persist_auth=True)
-                print("Firebase Auth initialized successfully")
+            # Use embedded Firebase configuration to avoid external files
+            embedded_firebase_config = {
+              "apiKey": "AIzaSyBsig0QxBmVelZQwef23-MoTFdeuZM5P-4",
+              "authDomain": "ghost-widget-7000.firebaseapp.com",
+              "projectId": "ghost-widget-7000",
+              "databaseURL": "https://ghost-widget-7000-default-rtdb.firebaseio.com/",
+              "storageBucket": "ghost-widget-7000.firebasestorage.app",
+              "google_client_id": "816342083028-te98svps0mjo5230g3aasfipt8qr824g.apps.googleusercontent.com",
+              "google_client_secret": "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",
+              "messagingSenderId": "816342083028",
+              "appId": "1:816342083028:web:0e0d8aa40d66bf858f2241",
+              "measurementId": "G-XGLGL9E2TJ"
+            }
 
-                # Check if user is already authenticated from previous session
-                if self.firebase_auth.is_authenticated():
-                    user_data = self.firebase_auth.get_current_user()
-                    if user_data:
-                        # Update UI to show authenticated state
-                        print(f"✅ Auto-restored session for: {self.firebase_auth.get_user_email()}")
-                        # We'll update the UI after init_ui is called
-                        self._pending_auth_restore = user_data
-                    else:
-                        self._pending_auth_restore = None
+            self.firebase_auth = FirebaseAuth(config=embedded_firebase_config, persist_auth=True)
+            print("Firebase Auth initialized successfully")
+
+            # Check if user is already authenticated from previous session
+            if self.firebase_auth.is_authenticated():
+                user_data = self.firebase_auth.get_current_user()
+                if user_data:
+                    # Update UI to show authenticated state
+                    print(f"✅ Auto-restored session for: {self.firebase_auth.get_user_email()}")
+                    # We'll update the UI after init_ui is called
+                    self._pending_auth_restore = user_data
                 else:
                     self._pending_auth_restore = None
             else:
-                print("Firebase config not found. Create firebase_config.json to enable authentication.")
                 self._pending_auth_restore = None
         except Exception as e:
             print(f"Failed to initialize Firebase Auth: {e}")
@@ -978,10 +997,10 @@ class OverlayWindow(QWidget):
         self.setWindowTitle("Ghost")
 
         # Set app icon
-        icon_path = Path("icons/logo-main.png")
-        if icon_path.exists():
+        icon_path = resource_path("icons/logo-main.png")
+        if os.path.exists(icon_path):
             from PyQt6.QtGui import QIcon
-            self.setWindowIcon(QIcon(str(icon_path)))
+            self.setWindowIcon(QIcon(icon_path))
 
         # Visual sizing - taller to maximize chat area
         self.setFixedSize(440, 700)
@@ -1008,10 +1027,10 @@ class OverlayWindow(QWidget):
 
         # Logo (10x bigger: 240x240)
         logo_label = QLabel()
-        logo_path = Path("icons/logo-main.png")
-        if logo_path.exists():
+        logo_path = resource_path("icons/logo-main.png")
+        if os.path.exists(logo_path):
             from PyQt6.QtGui import QPixmap
-            pixmap = QPixmap(str(logo_path))
+            pixmap = QPixmap(logo_path)
             scaled_pixmap = pixmap.scaled(35, 35, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             logo_label.setPixmap(scaled_pixmap)
             title_h.addWidget(logo_label)
@@ -2115,6 +2134,135 @@ class OverlayWindow(QWidget):
             self.signals.log.emit("<span style='color: #60A5FA;'>💬 Continuing previous conversation...</span>")
             self.conversation_context = None
 
+    def _show_github_user_code_dialog(self, user_code, verification_url):
+        """Show a dialog with the GitHub user code for authentication"""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QFont
+        import webbrowser
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("GitHub Authentication")
+        dialog.setFixedWidth(450)
+        dialog.setStyleSheet("""
+            QDialog {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1F2937,
+                    stop:1 #111827
+                );
+                border-radius: 12px;
+            }
+            QLabel {
+                color: #F3F4F6;
+                padding: 8px;
+            }
+            QPushButton {
+                background: #3B82F6;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #2563EB;
+            }
+            QPushButton:pressed {
+                background: #1D4ED8;
+            }
+        """)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
+
+        # Title
+        title = QLabel("🔐 GitHub Authentication")
+        title_font = QFont()
+        title_font.setPointSize(16)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        # Instructions
+        instructions = QLabel("Please enter this code in your browser to authorize GitHub access:")
+        instructions.setWordWrap(True)
+        instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(instructions)
+
+        # User code (large and centered)
+        code_label = QLabel(user_code)
+        code_font = QFont("Courier New")
+        code_font.setPointSize(24)
+        code_font.setBold(True)
+        code_label.setFont(code_font)
+        code_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        code_label.setStyleSheet("""
+            background: rgba(59, 130, 246, 0.2);
+            border: 2px solid #3B82F6;
+            border-radius: 8px;
+            padding: 20px;
+            color: #60A5FA;
+            letter-spacing: 4px;
+        """)
+        layout.addWidget(code_label)
+
+        # URL info
+        url_label = QLabel(f"Browser opened to: {verification_url}")
+        url_label.setWordWrap(True)
+        url_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        url_label.setStyleSheet("color: #9CA3AF; font-size: 11px;")
+        layout.addWidget(url_label)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+
+        copy_btn = QPushButton("📋 Copy Code")
+        copy_btn.clicked.connect(lambda: self._copy_to_clipboard(user_code, dialog))
+
+        open_browser_btn = QPushButton("🌐 Open Browser")
+        open_browser_btn.clicked.connect(lambda: webbrowser.open(verification_url))
+
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: #374151;
+            }
+            QPushButton:hover {
+                background: #4B5563;
+            }
+        """)
+        close_btn.clicked.connect(dialog.accept)
+
+        button_layout.addWidget(copy_btn)
+        button_layout.addWidget(open_browser_btn)
+        button_layout.addWidget(close_btn)
+
+        layout.addLayout(button_layout)
+
+        dialog.setLayout(layout)
+        dialog.show()  # Non-blocking
+
+    def _copy_to_clipboard(self, text, dialog=None):
+        """Copy text to clipboard and show feedback"""
+        try:
+            import pyperclip
+            pyperclip.copy(text)
+            self.signals.log.emit(f"<span style='color: #10B981;'>✓ Code copied to clipboard!</span>")
+            if dialog:
+                # Briefly change button text
+                for btn in dialog.findChildren(QPushButton):
+                    if "Copy" in btn.text():
+                        original_text = btn.text()
+                        btn.setText("✓ Copied!")
+                        QTimer.singleShot(1500, lambda: btn.setText(original_text))
+        except Exception as e:
+            self.signals.log.emit(f"<span style='color: #EF4444;'>Failed to copy: {str(e)}</span>")
+
     def on_github_signin(self):
         """Handle GitHub Sign-In via OAuth Device Flow"""
         if not self.github_auth:
@@ -2128,8 +2276,13 @@ class OverlayWindow(QWidget):
 
             # Run sign-in in a separate thread to avoid blocking UI
             def sign_in_thread():
-                def progress_callback(message):
-                    _from_companion_q.put(("GITHUB_PROGRESS", message))
+                def progress_callback(message, user_code=None, verification_url=None):
+                    # Send progress with optional user code data
+                    _from_companion_q.put(("GITHUB_PROGRESS", {
+                        "message": message,
+                        "user_code": user_code,
+                        "verification_url": verification_url
+                    }))
 
                 print("🔄 Starting GitHub OAuth Device Flow...")
                 result = self.github_auth.sign_in_with_browser(progress_callback=progress_callback)
@@ -2587,8 +2740,19 @@ class OverlayWindow(QWidget):
                 self.append_progress(event_type, data)
             elif typ == "GITHUB_PROGRESS":
                 # Handle GitHub authentication progress updates
-                message = payload
-                self.signals.log.emit(f"<span style='color: #60A5FA;'>{message}</span>")
+                if isinstance(payload, dict):
+                    message = payload.get("message", "")
+                    user_code = payload.get("user_code")
+                    verification_url = payload.get("verification_url")
+
+                    # Show user code in a dialog if provided
+                    if user_code and verification_url:
+                        self._show_github_user_code_dialog(user_code, verification_url)
+
+                    self.signals.log.emit(f"<span style='color: #60A5FA;'>{message}</span>")
+                else:
+                    # Fallback for string messages
+                    self.signals.log.emit(f"<span style='color: #60A5FA;'>{payload}</span>")
             elif typ == "GITHUB_AUTH_RESULT":
                 # Handle GitHub auth result
                 print(f"📥 Received GITHUB_AUTH_RESULT in UI thread")
@@ -2742,18 +2906,22 @@ def main():
     firebase_auth = None
     if FIREBASE_AVAILABLE:
         try:
-            config_path = Path("firebase_config.json")
-            if config_path.exists():
-                firebase_auth = FirebaseAuth(config_file="firebase_config.json", persist_auth=True)
-                print("✅ Firebase Auth initialized")
-            else:
-                print("❌ Firebase config not found. Authentication required!")
-                QMessageBox.critical(
-                    None,
-                    "Configuration Error",
-                    "firebase_config.json not found. Please contact support or check installation."
-                )
-                sys.exit(1)
+            # Use embedded Firebase configuration to avoid external files
+            embedded_firebase_config = {
+              "apiKey": "AIzaSyBsig0QxBmVelZQwef23-MoTFdeuZM5P-4",
+              "authDomain": "ghost-widget-7000.firebaseapp.com",
+              "projectId": "ghost-widget-7000",
+              "databaseURL": "https://ghost-widget-7000-default-rtdb.firebaseio.com/",
+              "storageBucket": "ghost-widget-7000.firebasestorage.app",
+              "google_client_id": "816342083028-te98svps0mjo5230g3aasfipt8qr824g.apps.googleusercontent.com",
+              "google_client_secret": "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",
+              "messagingSenderId": "816342083028",
+              "appId": "1:816342083028:web:0e0d8aa40d66bf858f2241",
+              "measurementId": "G-XGLGL9E2TJ"
+            }
+
+            firebase_auth = FirebaseAuth(config=embedded_firebase_config, persist_auth=True)
+            print("✅ Firebase Auth initialized")
         except Exception as e:
             print(f"❌ Failed to initialize Firebase Auth: {e}")
             QMessageBox.critical(
