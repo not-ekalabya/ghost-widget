@@ -61,3 +61,6 @@ mss>=9.0.0
 
 # Analytics tracking (optional - for usage monitoring)
 google-analytics-data>=0.19.0
+
+# Auto-updater
+packaging>=21.0

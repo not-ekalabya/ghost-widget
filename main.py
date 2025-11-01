@@ -62,6 +62,16 @@ except Exception as e:
     FIRESTORE_CHAT_AVAILABLE = False
     _firestore_chat_import_error = str(e)
 
+# Import Auto-updater
+try:
+    from updater import UpdateChecker, check_for_updates_background
+    from version import __version__
+    UPDATER_AVAILABLE = True
+except Exception as e:
+    UPDATER_AVAILABLE = False
+    __version__ = "1.0.0"
+    _updater_import_error = str(e)
+
 USE_PYQT6 = True
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
@@ -569,6 +579,10 @@ class OverlayWindow(QWidget):
         self.init_ui()
         self.start_polling_companion_queue()
         self.start_auth_token_refresh_timer()
+
+        # Check for updates on startup (in background)
+        if UPDATER_AVAILABLE:
+            self._check_for_updates_on_startup()
 
     def _init_firebase_auth(self):
         """Initialize Firebase Auth if config file exists"""
@@ -2134,6 +2148,196 @@ class OverlayWindow(QWidget):
             self.signals.log.emit("<span style='color: #60A5FA;'>💬 Continuing previous conversation...</span>")
             self.conversation_context = None
 
+    def _check_for_updates_on_startup(self):
+        """Check for updates in background on app startup"""
+        def on_update_check_complete(update_info):
+            # This will be called from background thread, so emit signal to update UI
+            if update_info and update_info.get('available'):
+                # Show update notification in UI thread via queue
+                _from_companion_q.put(("UPDATE_AVAILABLE", update_info))
+
+        # Check in background thread
+        check_for_updates_background(callback=on_update_check_complete)
+
+    def _show_update_notification(self, update_info):
+        """Show update notification dialog with download option"""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QProgressBar
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QFont
+        import webbrowser
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Update Available")
+        dialog.setFixedWidth(500)
+        dialog.setStyleSheet("""
+            QDialog {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1F2937,
+                    stop:1 #111827
+                );
+                border-radius: 12px;
+            }
+            QLabel {
+                color: #F3F4F6;
+                padding: 8px;
+            }
+            QPushButton {
+                background: #10B981;
+                color: white;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #059669;
+            }
+            QPushButton:pressed {
+                background: #047857;
+            }
+            QProgressBar {
+                border: 2px solid #374151;
+                border-radius: 5px;
+                text-align: center;
+                background: #1F2937;
+            }
+            QProgressBar::chunk {
+                background-color: #10B981;
+                border-radius: 3px;
+            }
+        """)
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
+
+        # Title
+        title = QLabel("✨ Update Available!")
+        title_font = QFont()
+        title_font.setPointSize(18)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        # Version info
+        version_text = f"Version {update_info['version']} is now available\n(You're on version {update_info['current_version']})"
+        version_label = QLabel(version_text)
+        version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        version_label.setStyleSheet("color: #9CA3AF; font-size: 13px;")
+        layout.addWidget(version_label)
+
+        # Changelog
+        changelog_label = QLabel("What's New:")
+        changelog_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        layout.addWidget(changelog_label)
+
+        changelog_text = QTextEdit()
+        changelog_text.setReadOnly(True)
+        changelog_text.setMaximumHeight(150)
+        changelog_text.setPlainText(update_info.get('changelog', 'No changelog available'))
+        changelog_text.setStyleSheet("""
+            QTextEdit {
+                background: rgba(0, 0, 0, 0.3);
+                border: 1px solid #374151;
+                border-radius: 6px;
+                padding: 10px;
+                color: #D1D5DB;
+                font-size: 12px;
+            }
+        """)
+        layout.addWidget(changelog_text)
+
+        # Progress bar (hidden initially)
+        self.update_progress_bar = QProgressBar()
+        self.update_progress_bar.setTextVisible(True)
+        self.update_progress_bar.setVisible(False)
+        layout.addWidget(self.update_progress_bar)
+
+        # Status label
+        self.update_status_label = QLabel("")
+        self.update_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.update_status_label.setStyleSheet("color: #60A5FA; font-size: 12px;")
+        self.update_status_label.setVisible(False)
+        layout.addWidget(self.update_status_label)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+
+        download_btn = QPushButton("🚀 Download & Install")
+        download_btn.clicked.connect(lambda: self._download_and_install_update(update_info, dialog))
+
+        visit_btn = QPushButton("🌐 View on GitHub")
+        visit_btn.setStyleSheet("""
+            QPushButton {
+                background: #3B82F6;
+            }
+            QPushButton:hover {
+                background: #2563EB;
+            }
+        """)
+        visit_btn.clicked.connect(lambda: webbrowser.open(update_info.get('release_url', '')))
+
+        later_btn = QPushButton("Later")
+        later_btn.setStyleSheet("""
+            QPushButton {
+                background: #374151;
+            }
+            QPushButton:hover {
+                background: #4B5563;
+            }
+        """)
+        later_btn.clicked.connect(dialog.accept)
+
+        button_layout.addWidget(download_btn)
+        button_layout.addWidget(visit_btn)
+        button_layout.addWidget(later_btn)
+
+        layout.addLayout(button_layout)
+
+        dialog.setLayout(layout)
+        dialog.exec()  # Modal dialog
+
+    def _download_and_install_update(self, update_info, dialog):
+        """Download and install update"""
+        try:
+            # Disable buttons
+            for btn in dialog.findChildren(QPushButton):
+                btn.setEnabled(False)
+
+            # Show progress
+            self.update_progress_bar.setVisible(True)
+            self.update_status_label.setVisible(True)
+            self.update_status_label.setText("Downloading update...")
+
+            def progress_callback(stage, data):
+                if stage == 'download_progress':
+                    percent = data.get('percent', 0)
+                    self.update_progress_bar.setValue(int(percent))
+                    self.update_status_label.setText(f"Downloading... {int(percent)}%")
+                elif stage == 'installing':
+                    self.update_progress_bar.setValue(100)
+                    self.update_status_label.setText("Installing update...")
+                elif stage == 'complete':
+                    self.update_status_label.setText("✓ Update installed! Restarting...")
+                    QTimer.singleShot(2000, lambda: sys.exit(0))  # Exit app to allow update
+                elif stage == 'error':
+                    self.update_status_label.setText(f"❌ {data.get('message', 'Update failed')}")
+                    self.update_status_label.setStyleSheet("color: #EF4444;")
+
+            # Run update in background thread
+            def run_update():
+                checker = UpdateChecker()
+                checker.auto_update(progress_callback=lambda s, d: _from_companion_q.put(("UPDATE_PROGRESS", (s, d))))
+
+            threading.Thread(target=run_update, daemon=True).start()
+
+        except Exception as e:
+            self.signals.log.emit(f"<span style='color: #EF4444;'>Update failed: {str(e)}</span>")
+
     def _show_github_user_code_dialog(self, user_code, verification_url):
         """Show a dialog with the GitHub user code for authentication"""
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
@@ -2823,6 +3027,27 @@ class OverlayWindow(QWidget):
                 success = payload
                 if success:
                     self.memory_status_lbl.setText("Deleted")
+            elif typ == "UPDATE_AVAILABLE":
+                # Handle update available notification
+                update_info = payload
+                self._show_update_notification(update_info)
+            elif typ == "UPDATE_PROGRESS":
+                # Handle update download/install progress
+                stage, data = payload
+                if hasattr(self, 'update_progress_bar') and hasattr(self, 'update_status_label'):
+                    if stage == 'download_progress':
+                        percent = data.get('percent', 0)
+                        self.update_progress_bar.setValue(int(percent))
+                        self.update_status_label.setText(f"Downloading... {int(percent)}%")
+                    elif stage == 'installing':
+                        self.update_progress_bar.setValue(100)
+                        self.update_status_label.setText("Installing update...")
+                    elif stage == 'complete':
+                        self.update_status_label.setText("✓ Update installed! Restarting...")
+                        QTimer.singleShot(2000, lambda: sys.exit(0))
+                    elif stage == 'error':
+                        self.update_status_label.setText(f"❌ {data.get('message', 'Update failed')}")
+                        self.update_status_label.setStyleSheet("color: #EF4444;")
                     self.memory_status_lbl.setStyleSheet("color: #10B981; font-size: 9px; margin-top: 4px;")
                     # Refresh the list after deletion
                     self.on_refresh_memories()
