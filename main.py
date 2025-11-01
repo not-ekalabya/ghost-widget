@@ -581,8 +581,9 @@ class OverlayWindow(QWidget):
         self.start_auth_token_refresh_timer()
 
         # Check for updates on startup (in background)
-        if UPDATER_AVAILABLE:
-            self._check_for_updates_on_startup()
+        # Commented out until GitHub repository is created and first release is published
+        # if UPDATER_AVAILABLE:
+        #     self._check_for_updates_on_startup()
 
     def _init_firebase_auth(self):
         """Initialize Firebase Auth if config file exists"""
@@ -1593,6 +1594,160 @@ class OverlayWindow(QWidget):
         # Add memories tab
         self.tabs.addTab(memories_tab, "Memories")
 
+        # === VERSION TAB ===
+        version_tab = QWidget()
+        version_layout = QVBoxLayout(version_tab)
+        version_layout.setContentsMargins(0, 16, 0, 0)
+        version_layout.setSpacing(12)
+
+        # Version info section
+        version_info_group = QVBoxLayout()
+        version_info_group.setSpacing(8)
+
+        # Current version
+        current_version_layout = QHBoxLayout()
+        current_version_label = QLabel("Current Version:")
+        current_version_label.setObjectName("fieldLabel")
+        current_version_layout.addWidget(current_version_label)
+
+        self.current_version_value = QLabel(__version__)
+        self.current_version_value.setStyleSheet("color: #10B981; font-weight: bold; font-size: 14px;")
+        current_version_layout.addWidget(self.current_version_value)
+        current_version_layout.addStretch()
+        version_info_group.addLayout(current_version_layout)
+
+        # Updater status
+        updater_status_layout = QHBoxLayout()
+        updater_status_label = QLabel("Auto-Update System:")
+        updater_status_label.setObjectName("fieldLabel")
+        updater_status_layout.addWidget(updater_status_label)
+
+        updater_status_text = "✅ Available" if UPDATER_AVAILABLE else "❌ Not Available"
+        updater_status_color = "#10B981" if UPDATER_AVAILABLE else "#EF4444"
+        self.updater_status_value = QLabel(updater_status_text)
+        self.updater_status_value.setStyleSheet(f"color: {updater_status_color}; font-weight: bold;")
+        updater_status_layout.addWidget(self.updater_status_value)
+        updater_status_layout.addStretch()
+        version_info_group.addLayout(updater_status_layout)
+
+        if not UPDATER_AVAILABLE:
+            error_label = QLabel(f"Error: {_updater_import_error}")
+            error_label.setStyleSheet("color: #EF4444; font-size: 10px; margin-left: 20px;")
+            error_label.setWordWrap(True)
+            version_info_group.addWidget(error_label)
+
+        # GitHub repo
+        repo_layout = QHBoxLayout()
+        repo_label = QLabel("GitHub Repository:")
+        repo_label.setObjectName("fieldLabel")
+        repo_layout.addWidget(repo_label)
+
+        try:
+            from version import GITHUB_REPO
+            repo_text = GITHUB_REPO
+        except:
+            repo_text = "Not configured"
+
+        self.repo_value = QLabel(repo_text)
+        self.repo_value.setStyleSheet("color: #60A5FA; font-size: 11px;")
+        repo_layout.addWidget(self.repo_value)
+        repo_layout.addStretch()
+        version_info_group.addLayout(repo_layout)
+
+        # Update check URL
+        url_layout = QHBoxLayout()
+        url_label = QLabel("Update Check URL:")
+        url_label.setObjectName("fieldLabel")
+        url_layout.addWidget(url_label)
+
+        try:
+            from version import UPDATE_CHECK_URL
+            url_text = UPDATE_CHECK_URL
+        except:
+            url_text = "Not configured"
+
+        self.url_value = QLabel(url_text)
+        self.url_value.setStyleSheet("color: #71717A; font-size: 9px;")
+        self.url_value.setWordWrap(True)
+        url_layout.addWidget(self.url_value, 1)
+        version_info_group.addLayout(url_layout)
+
+        version_layout.addLayout(version_info_group)
+
+        # Manual update check button
+        check_updates_btn = QPushButton("🔍 Check for Updates Now")
+        check_updates_btn.setObjectName("accentButton")
+        check_updates_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        check_updates_btn.clicked.connect(self.on_manual_update_check)
+        check_updates_btn.setFixedHeight(36)
+        version_layout.addWidget(check_updates_btn)
+
+        # Divider
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet("background: rgba(255, 255, 255, 0.08); max-height: 1px;")
+        version_layout.addWidget(divider)
+
+        # Update logs section
+        logs_header = QLabel("UPDATE LOGS")
+        logs_header.setObjectName("sectionLabel")
+        version_layout.addWidget(logs_header)
+
+        # Scroll area for update logs
+        logs_scroll = QScrollArea()
+        logs_scroll.setObjectName("memoryScrollArea")
+        logs_scroll.setWidgetResizable(True)
+        logs_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        logs_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        # Container for logs
+        logs_container = QWidget()
+        logs_container.setObjectName("memoriesContainer")
+        logs_container_layout = QVBoxLayout(logs_container)
+        logs_container_layout.setContentsMargins(8, 8, 8, 8)
+        logs_container_layout.setSpacing(4)
+
+        # Update logs text area
+        self.update_logs_text = QTextEdit()
+        self.update_logs_text.setReadOnly(True)
+        self.update_logs_text.setObjectName("updateLogsText")
+        self.update_logs_text.setStyleSheet("""
+            QTextEdit#updateLogsText {
+                background: rgba(0, 0, 0, 0.3);
+                color: #D4D4D8;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                padding: 12px;
+                font-family: 'Consolas', 'Monaco', monospace;
+                font-size: 10px;
+                line-height: 1.5;
+            }
+        """)
+        logs_container_layout.addWidget(self.update_logs_text)
+
+        logs_scroll.setWidget(logs_container)
+        version_layout.addWidget(logs_scroll, 1)
+
+        # Clear logs button
+        clear_logs_btn = QPushButton("Clear Logs")
+        clear_logs_btn.setObjectName("secondaryButton")
+        clear_logs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_logs_btn.clicked.connect(self.on_clear_update_logs)
+        clear_logs_btn.setFixedHeight(32)
+        version_layout.addWidget(clear_logs_btn)
+
+        # Add version tab
+        self.tabs.addTab(version_tab, "Version")
+
+        # Initialize update logs
+        self.update_logs = []
+        self._log_update_event("info", "Version tab initialized")
+        self._log_update_event("info", f"Current version: {__version__}")
+        if UPDATER_AVAILABLE:
+            self._log_update_event("success", "Auto-update system is available")
+        else:
+            self._log_update_event("error", f"Auto-update system unavailable: {_updater_import_error}")
+
         container.setLayout(content)
         root.addWidget(container)
         self.setLayout(root)
@@ -2148,13 +2303,98 @@ class OverlayWindow(QWidget):
             self.signals.log.emit("<span style='color: #60A5FA;'>💬 Continuing previous conversation...</span>")
             self.conversation_context = None
 
+    # === UPDATE LOGGING METHODS ===
+    def _log_update_event(self, level, message):
+        """Log update-related events to the Version tab
+
+        Args:
+            level: 'info', 'success', 'warning', 'error'
+            message: Log message
+        """
+        from datetime import datetime
+
+        timestamp = datetime.now().strftime("%H:%M:%S")
+
+        # Color coding based on level
+        colors = {
+            'info': '#60A5FA',      # Blue
+            'success': '#10B981',   # Green
+            'warning': '#F59E0B',   # Yellow
+            'error': '#EF4444'      # Red
+        }
+        color = colors.get(level, '#D4D4D8')
+
+        # Icons for each level
+        icons = {
+            'info': 'ℹ️',
+            'success': '✅',
+            'warning': '⚠️',
+            'error': '❌'
+        }
+        icon = icons.get(level, '•')
+
+        # Store in logs array
+        log_entry = {
+            'timestamp': timestamp,
+            'level': level,
+            'message': message,
+            'color': color,
+            'icon': icon
+        }
+        self.update_logs.append(log_entry)
+
+        # Update the text widget
+        if hasattr(self, 'update_logs_text'):
+            html_log = f'<span style="color: #71717A;">[{timestamp}]</span> <span style="color: {color};">{icon} {message}</span>'
+            self.update_logs_text.append(html_log)
+            # Auto-scroll to bottom
+            scrollbar = self.update_logs_text.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+    def on_clear_update_logs(self):
+        """Clear the update logs"""
+        self.update_logs = []
+        if hasattr(self, 'update_logs_text'):
+            self.update_logs_text.clear()
+            self._log_update_event("info", "Logs cleared")
+
+    def on_manual_update_check(self):
+        """Manually check for updates"""
+        if not UPDATER_AVAILABLE:
+            self._log_update_event("error", "Auto-update system is not available")
+            self.signals.log.emit("<span style='color: #EF4444;'>❌ Auto-update system is not available</span>")
+            return
+
+        self._log_update_event("info", "Manual update check initiated...")
+        self.signals.log.emit("<span style='color: #60A5FA;'>🔍 Checking for updates...</span>")
+
+        def on_update_check_complete(update_info):
+            if update_info is None:
+                self._log_update_event("error", "Failed to check for updates (network error or API failure)")
+                _from_companion_q.put(("UPDATE_CHECK_FAILED", None))
+            elif update_info.get('available'):
+                self._log_update_event("success", f"Update available: v{update_info['version']}")
+                _from_companion_q.put(("UPDATE_AVAILABLE", update_info))
+            else:
+                self._log_update_event("info", f"Already on latest version: v{update_info.get('version', __version__)}")
+                _from_companion_q.put(("NO_UPDATE", update_info))
+
+        check_for_updates_background(callback=on_update_check_complete)
+
     def _check_for_updates_on_startup(self):
         """Check for updates in background on app startup"""
+        self._log_update_event("info", "Checking for updates on startup...")
+
         def on_update_check_complete(update_info):
             # This will be called from background thread, so emit signal to update UI
-            if update_info and update_info.get('available'):
+            if update_info is None:
+                self._log_update_event("warning", "Update check failed (network error or API failure)")
+            elif update_info.get('available'):
+                self._log_update_event("success", f"Update found: v{update_info['version']}")
                 # Show update notification in UI thread via queue
                 _from_companion_q.put(("UPDATE_AVAILABLE", update_info))
+            else:
+                self._log_update_event("info", f"No updates available (current: v{__version__})")
 
         # Check in background thread
         check_for_updates_background(callback=on_update_check_complete)
@@ -2304,6 +2544,10 @@ class OverlayWindow(QWidget):
     def _download_and_install_update(self, update_info, dialog):
         """Download and install update"""
         try:
+            self._log_update_event("info", f"Starting download of v{update_info['version']}...")
+            self._log_update_event("info", f"Download URL: {update_info.get('download_url', 'N/A')}")
+            self._log_update_event("info", f"Asset size: {update_info.get('asset_size', 0) / 1024 / 1024:.2f} MB")
+
             # Disable buttons
             for btn in dialog.findChildren(QPushButton):
                 btn.setEnabled(False)
@@ -2314,28 +2558,51 @@ class OverlayWindow(QWidget):
             self.update_status_label.setText("Downloading update...")
 
             def progress_callback(stage, data):
-                if stage == 'download_progress':
+                if stage == 'checking':
+                    self._log_update_event("info", data.get('message', 'Checking for updates...'))
+                elif stage == 'downloading':
+                    self._log_update_event("info", data.get('message', 'Downloading update...'))
+                elif stage == 'download_progress':
                     percent = data.get('percent', 0)
+                    downloaded = data.get('downloaded', 0)
+                    total = data.get('total', 0)
                     self.update_progress_bar.setValue(int(percent))
                     self.update_status_label.setText(f"Downloading... {int(percent)}%")
+                    # Log every 25% progress
+                    if int(percent) % 25 == 0 and int(percent) > 0:
+                        self._log_update_event("info", f"Download progress: {int(percent)}% ({downloaded / 1024 / 1024:.1f}MB / {total / 1024 / 1024:.1f}MB)")
                 elif stage == 'installing':
+                    self._log_update_event("info", "Installing update...")
                     self.update_progress_bar.setValue(100)
                     self.update_status_label.setText("Installing update...")
                 elif stage == 'complete':
+                    self._log_update_event("success", "Update installed successfully!")
+                    self._log_update_event("info", "Application will restart in 2 seconds...")
                     self.update_status_label.setText("✓ Update installed! Restarting...")
                     QTimer.singleShot(2000, lambda: sys.exit(0))  # Exit app to allow update
                 elif stage == 'error':
-                    self.update_status_label.setText(f"❌ {data.get('message', 'Update failed')}")
+                    error_msg = data.get('message', 'Update failed')
+                    self._log_update_event("error", f"Update failed: {error_msg}")
+                    self.update_status_label.setText(f"❌ {error_msg}")
                     self.update_status_label.setStyleSheet("color: #EF4444;")
 
             # Run update in background thread
             def run_update():
-                checker = UpdateChecker()
-                checker.auto_update(progress_callback=lambda s, d: _from_companion_q.put(("UPDATE_PROGRESS", (s, d))))
+                try:
+                    checker = UpdateChecker()
+                    self._log_update_event("info", "UpdateChecker initialized")
+                    result = checker.auto_update(progress_callback=lambda s, d: _from_companion_q.put(("UPDATE_PROGRESS", (s, d))))
+                    if not result:
+                        self._log_update_event("error", "Update process returned False")
+                except Exception as e:
+                    self._log_update_event("error", f"Exception during update: {str(e)}")
+                    import traceback
+                    self._log_update_event("error", f"Traceback: {traceback.format_exc()}")
 
             threading.Thread(target=run_update, daemon=True).start()
 
         except Exception as e:
+            self._log_update_event("error", f"Failed to start update: {str(e)}")
             self.signals.log.emit(f"<span style='color: #EF4444;'>Update failed: {str(e)}</span>")
 
     def _show_github_user_code_dialog(self, user_code, verification_url):
@@ -3048,6 +3315,17 @@ class OverlayWindow(QWidget):
                     elif stage == 'error':
                         self.update_status_label.setText(f"❌ {data.get('message', 'Update failed')}")
                         self.update_status_label.setStyleSheet("color: #EF4444;")
+            elif typ == "UPDATE_CHECK_FAILED":
+                # Handle failed update check
+                self.signals.log.emit("<span style='color: #EF4444;'>❌ Failed to check for updates</span>")
+            elif typ == "NO_UPDATE":
+                # Handle no update available
+                update_info = payload
+                self.signals.log.emit(f"<span style='color: #10B981;'>✓ You're on the latest version (v{update_info.get('version', __version__)})</span>")
+            elif typ == "MEMORY_DELETED":
+                # Handle memory deletion
+                if payload:
+                    self.memory_status_lbl.setText("Memory deleted successfully")
                     self.memory_status_lbl.setStyleSheet("color: #10B981; font-size: 9px; margin-top: 4px;")
                     # Refresh the list after deletion
                     self.on_refresh_memories()

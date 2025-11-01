@@ -21,7 +21,8 @@
       "Bash(timeout:*)",
       "Bash(ping:*)",
       "Bash(pip show:*)",
-      "Bash(pyinstaller:*)"
+      "Bash(pyinstaller:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []
