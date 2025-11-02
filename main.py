@@ -584,6 +584,10 @@ class OverlayWindow(QWidget):
 
         # Check for updates on startup (in background)
         if UPDATER_AVAILABLE:
+            # First check if there was a previous update attempt
+            self._check_previous_update_status()
+
+            # Then check for new updates
             self._check_for_updates_on_startup()
 
     def _init_firebase_auth(self):
@@ -1057,7 +1061,7 @@ class OverlayWindow(QWidget):
         # self.status_dot.setStyleSheet("color: #6B7280; font-size: 16px;")
         # title_h.addWidget(self.status_dot)
 
-        title_lbl = QLabel("Ghost - Update Test Final")
+        title_lbl = QLabel("Ghost - What da Hail")
         title_lbl.setObjectName("titleLabel")
         title_font = QFont()
         title_font.setPointSize(15)
@@ -2390,6 +2394,40 @@ class OverlayWindow(QWidget):
 
         check_for_updates_background(callback=on_update_check_complete)
 
+    def _check_previous_update_status(self):
+        """Check if there was a previous update attempt and show status"""
+        try:
+            from updater import check_previous_update_status
+            import os
+
+            status = check_previous_update_status()
+            if not status:
+                return  # No previous update
+
+            self._log_update_event("info", f"Previous update status: {status.get('message', 'Unknown')}")
+
+            # If update failed, show a dialog with log locations
+            if not status.get('success'):
+                self._log_update_event("error", "Previous update failed!")
+
+                # Send notification to show dialog
+                _from_companion_q.put(("UPDATE_FAILED_NOTIFICATION", status))
+            else:
+                # Update succeeded - optionally clean up old logs
+                if status.get('log_file') and os.path.exists(status['log_file']):
+                    try:
+                        # Keep logs for 7 days
+                        from pathlib import Path
+                        import time
+                        log_path = Path(status['log_file'])
+                        if time.time() - log_path.stat().st_mtime > 7 * 24 * 3600:
+                            os.remove(status['log_file'])
+                    except:
+                        pass
+
+        except Exception as e:
+            self._log_update_event("error", f"Failed to check previous update status: {e}")
+
     def _check_for_updates_on_startup(self):
         """Check for updates in background on app startup"""
         self._log_update_event("info", "Checking for updates on startup...")
@@ -2413,6 +2451,153 @@ class OverlayWindow(QWidget):
 
         # Check in background thread
         check_for_updates_background(callback=on_update_check_complete)
+
+    def _show_restart_prompt(self):
+        """Show a prominent dialog for one-click update installation"""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QFont
+        import sys
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Update Ready")
+        dialog.setFixedWidth(450)
+        dialog.setStyleSheet("""
+            QDialog {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1F2937, stop:1 #111827);
+            }
+            QLabel { color: #F3F4F6; padding: 8px; }
+            QPushButton {
+                background: #10B981; color: white; border: none;
+                padding: 12px 24px; border-radius: 6px; font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover { background: #059669; }
+        """)
+
+        layout = QVBoxLayout()
+
+        # Title
+        title = QLabel("✅ Update Downloaded Successfully!")
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #10B981;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        # Message
+        message = QLabel(
+            "The new version is ready to install.<br><br>"
+            "Click 'Install & Restart' to complete the update.<br>"
+            "Ghost will close and reopen automatically with the new version."
+        )
+        message.setWordWrap(True)
+        message.setStyleSheet("font-size: 13px; padding: 20px;")
+        message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(message)
+
+        def install_and_restart():
+            dialog.close()
+            # Trigger the update and restart
+            if hasattr(self, 'update_checker') and self.update_checker:
+                if self.update_checker.apply_update_and_restart():
+                    # Give the batch script a moment to start, then exit
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(500, lambda: sys.exit(0))
+
+        # Install & Restart button
+        install_btn = QPushButton("🚀 Install & Restart")
+        install_btn.clicked.connect(install_and_restart)
+        layout.addWidget(install_btn)
+
+        # Later button
+        later_btn = QPushButton("Later")
+        later_btn.setStyleSheet("""
+            QPushButton {
+                background: #374151; color: white; border: none;
+                padding: 10px 20px; border-radius: 6px; font-weight: bold;
+            }
+            QPushButton:hover { background: #4B5563; }
+        """)
+        later_btn.clicked.connect(dialog.close)
+        layout.addWidget(later_btn)
+
+        dialog.setLayout(layout)
+        dialog.exec()
+
+    def _show_update_failed_notification(self, status):
+        """Show notification about failed previous update with log locations"""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QTextEdit, QHBoxLayout
+        from PyQt6.QtCore import Qt
+        import webbrowser
+        import os
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Previous Update Failed")
+        dialog.setFixedWidth(600)
+        dialog.setStyleSheet("""
+            QDialog {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1F2937, stop:1 #111827);
+            }
+            QLabel { color: #F3F4F6; padding: 8px; }
+            QPushButton {
+                background: #3B82F6; color: white; border: none;
+                padding: 10px 20px; border-radius: 6px; font-weight: bold;
+            }
+            QPushButton:hover { background: #2563EB; }
+            QTextEdit {
+                background: #1F2937; color: #F3F4F6; border: 1px solid #374151;
+                border-radius: 4px; padding: 8px; font-family: Consolas, monospace;
+            }
+        """)
+
+        layout = QVBoxLayout()
+
+        # Title
+        title = QLabel("❌ Previous Update Failed")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; color: #EF4444;")
+        layout.addWidget(title)
+
+        # Message
+        msg = QLabel(status.get('message', 'The previous update attempt encountered errors.'))
+        msg.setWordWrap(True)
+        layout.addWidget(msg)
+
+        # Log file locations
+        logs_label = QLabel("📄 Log Files (for debugging):")
+        logs_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        layout.addWidget(logs_label)
+
+        log_text = ""
+        if status.get('log_file'):
+            log_text += f"Update Log:\n{status['log_file']}\n\n"
+        if status.get('batch_log_file'):
+            log_text += f"Installation Log:\n{status['batch_log_file']}"
+
+        log_display = QTextEdit()
+        log_display.setPlainText(log_text)
+        log_display.setReadOnly(True)
+        log_display.setMaximumHeight(100)
+        layout.addWidget(log_display)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+
+        def open_logs_folder():
+            import tempfile
+            os.startfile(tempfile.gettempdir())
+
+        open_btn = QPushButton("📁 Open Logs Folder")
+        open_btn.clicked.connect(open_logs_folder)
+
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("background: #374151;")
+        close_btn.clicked.connect(dialog.close)
+
+        btn_layout.addWidget(open_btn)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+        dialog.setLayout(layout)
+        dialog.show()
 
     def _show_update_notification(self, update_info):
         """Show update notification dialog with download option"""
@@ -2545,7 +2730,7 @@ class OverlayWindow(QWidget):
                 background: #4B5563;
             }
         """)
-        later_btn.clicked.connect(dialog.accept)
+        later_btn.clicked.connect(dialog.close)
 
         button_layout.addWidget(download_btn)
         button_layout.addWidget(visit_btn)
@@ -2554,7 +2739,12 @@ class OverlayWindow(QWidget):
         layout.addLayout(button_layout)
 
         dialog.setLayout(layout)
-        dialog.exec()  # Modal dialog
+
+        # Store dialog reference so it doesn't get garbage collected
+        self.update_dialog = dialog
+
+        # Use show() instead of exec() to allow event loop to process queue messages
+        dialog.show()  # Non-modal dialog allows UI updates during download
 
     def _download_and_install_update(self, update_info, dialog):
         """Download and install update"""
@@ -2586,15 +2776,23 @@ class OverlayWindow(QWidget):
                     # Log every 25% progress
                     if int(percent) % 25 == 0 and int(percent) > 0:
                         self._log_update_event("info", f"Download progress: {int(percent)}% ({downloaded / 1024 / 1024:.1f}MB / {total / 1024 / 1024:.1f}MB)")
-                elif stage == 'installing':
-                    self._log_update_event("info", "Installing update...")
+                elif stage == 'download_complete':
+                    self._log_update_event("success", "Download complete!")
                     self.update_progress_bar.setValue(100)
-                    self.update_status_label.setText("Installing update...")
+                    self.update_status_label.setText("✓ Download complete. Saving file...")
+                elif stage == 'saving':
+                    self._log_update_event("info", "Saving update file...")
+                    self.update_progress_bar.setValue(100)
+                    self.update_status_label.setText("Saving update...")
                 elif stage == 'complete':
-                    self._log_update_event("success", "Update installed successfully!")
-                    self._log_update_event("info", "Application will restart in 2 seconds...")
-                    self.update_status_label.setText("✓ Update installed! Restarting...")
-                    QTimer.singleShot(2000, lambda: sys.exit(0))  # Exit app to allow update
+                    self._log_update_event("success", "Update saved successfully!")
+                    self._log_update_event("info", "File saved to current directory")
+                    self._log_update_event("info", "App will restart automatically when you close it")
+                    self.update_status_label.setText("✓ Update ready! Close app to restart with new version")
+                    self.update_status_label.setStyleSheet("color: #10B981;")
+
+                    # Show a more prominent notification
+                    self._show_restart_prompt()
                 elif stage == 'error':
                     error_msg = data.get('message', 'Update failed')
                     self._log_update_event("error", f"Update failed: {error_msg}")
@@ -3313,23 +3511,47 @@ class OverlayWindow(QWidget):
                 # Handle update available notification
                 update_info = payload
                 self._show_update_notification(update_info)
+            elif typ == "UPDATE_FAILED_NOTIFICATION":
+                # Handle previous update failure notification
+                status = payload
+                self._show_update_failed_notification(status)
+            elif typ == "SHOW_RESTART_PROMPT":
+                # Handle restart prompt after update
+                self._show_restart_prompt()
             elif typ == "UPDATE_PROGRESS":
                 # Handle update download/install progress
                 stage, data = payload
+                print(f"[DEBUG] UPDATE_PROGRESS received: stage={stage}, data={data}")  # Debug
                 if hasattr(self, 'update_progress_bar') and hasattr(self, 'update_status_label'):
                     if stage == 'download_progress':
                         percent = data.get('percent', 0)
+                        print(f"[DEBUG] Setting progress bar to {percent}%")  # Debug
                         self.update_progress_bar.setValue(int(percent))
                         self.update_status_label.setText(f"Downloading... {int(percent)}%")
-                    elif stage == 'installing':
+                    elif stage == 'download_complete':
+                        print("[DEBUG] Download complete")  # Debug
                         self.update_progress_bar.setValue(100)
-                        self.update_status_label.setText("Installing update...")
+                        self.update_status_label.setText("✓ Download complete. Saving file...")
+                    elif stage == 'saving':
+                        print("[DEBUG] Saving update")  # Debug
+                        self.update_progress_bar.setValue(100)
+                        self.update_status_label.setText("Saving update...")
                     elif stage == 'complete':
-                        self.update_status_label.setText("✓ Update installed! Restarting...")
-                        QTimer.singleShot(2000, lambda: sys.exit(0))
+                        print("[DEBUG] Update saved successfully")  # Debug
+                        self.update_status_label.setText("✓ Update ready! Close app to restart with new version")
+                        self.update_status_label.setStyleSheet("color: #10B981;")
+                        # Close dialog after 5 seconds
+                        if hasattr(self, 'update_dialog'):
+                            QTimer.singleShot(5000, self.update_dialog.close)
+
+                        # Show restart prompt
+                        QTimer.singleShot(5500, lambda: _from_companion_q.put(("SHOW_RESTART_PROMPT", None)))
                     elif stage == 'error':
+                        print(f"[DEBUG] Update error: {data.get('message')}")  # Debug
                         self.update_status_label.setText(f"❌ {data.get('message', 'Update failed')}")
                         self.update_status_label.setStyleSheet("color: #EF4444;")
+                else:
+                    print("[DEBUG] update_progress_bar or update_status_label not found!")  # Debug
             elif typ == "UPDATE_CHECK_FAILED":
                 # Handle failed update check
                 self.signals.log.emit("<span style='color: #EF4444;'>❌ Failed to check for updates</span>")

@@ -22,7 +22,11 @@
       "Bash(ping:*)",
       "Bash(pip show:*)",
       "Bash(pyinstaller:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(git remote:*)",
+      "Bash(where gh:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []
