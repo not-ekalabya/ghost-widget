@@ -47,3 +47,7 @@ config.json
 
 # Autonomous content output
 autonomous_content.txt
+
+# Ignore screenshots and recordings directories (anywhere in the repo)
+screenshots/
+recordings/
