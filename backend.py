@@ -27,13 +27,13 @@ except ImportError:
     ANALYTICS_AVAILABLE = False
     print("Warning: analytics module not available. Usage tracking disabled.")
 
-# Mem0 integration
+# Local Memory System (privacy-focused, local-only storage)
 try:
-    from mem0 import MemoryClient
-    MEM0_AVAILABLE = True
+    from local_memory import LocalMemorySystem
+    LOCAL_MEMORY_AVAILABLE = True
 except ImportError:
-    MEM0_AVAILABLE = False
-    print("Warning: mem0 package not installed. Install with: pip install mem0ai")
+    LOCAL_MEMORY_AVAILABLE = False
+    print("Warning: local_memory module not available. Memory storage disabled.")
 
 # Google grounding for web search
 try:
@@ -137,22 +137,23 @@ class BackgroundCompanion:
         self.analysis_thread = None
         self.analysis_running = False
 
-        # Initialize Mem0 Platform with API key
-        self.use_mem0 = MEM0_AVAILABLE
-        self.mem0_client = None
-        if self.use_mem0:
+        # Initialize Local Memory System (privacy-focused, local-only storage)
+        self.use_local_memory = LOCAL_MEMORY_AVAILABLE
+        self.local_memory = None
+        if self.use_local_memory:
             try:
-                # Hard-coded Mem0 API key
-                mem0_api_key = "m0-GQo1C1BLFecWLInbI5Cb3R3MAum0cwxwbIOJcKnk"
-
-                # Initialize MemoryClient for managed Mem0 platform
-                # The platform handles graph memory and all storage automatically
-                self.mem0_client = MemoryClient(api_key=mem0_api_key)
-                print(f"OK Mem0 platform initialized for user: {self.user_id}")
+                # Initialize LocalMemorySystem with temporal awareness
+                self.local_memory = LocalMemorySystem(
+                    api_key=api_key,
+                    user_id=self.user_id,
+                    db_path="local_memory_db",  # Local storage directory
+                    temporal_decay_days=30  # Temporal decay over 30 days
+                )
+                print(f"✓ Local memory system initialized for user: {self.user_id}")
             except Exception as e:
-                print(f"WARNING Failed to initialize Mem0: {e}")
-                print("   Falling back to local database only")
-                self.use_mem0 = False
+                print(f"⚠️ Failed to initialize local memory: {e}")
+                print("   Falling back to SQLite database only")
+                self.use_local_memory = False
 
         # Initialize Claude for question answering (via Vertex AI)
         self.claude_client = None
@@ -337,7 +338,7 @@ class BackgroundCompanion:
                     },
                     {
                         "name": "store_memory",
-                        "description": "Store important information to long-term graph memory (Mem0). Use this when you observe something significant, novel, or worth remembering about the user's screen activity. Memories are stored per-user and as graph relationships. Only call this for truly important information, not routine/repetitive activity.",
+                        "description": "Store important information to long-term local memory with temporal awareness. Use this when you observe something significant, novel, or worth remembering about the user's screen activity. Memories are stored locally (privacy-focused) with semantic search and temporal decay. Only call this for truly important information, not routine/repetitive activity.",
                         "parameters": {
                             "type": "object",
                             "properties": {
@@ -1395,7 +1396,7 @@ Structure your analysis clearly with sections. Start with file paths section lis
             return f"Error analyzing: {str(e)}"
     
     def _store_context(self, screenshot_path, description, active_context):
-        """Store context in database with embedding and Mem0 graph memory"""
+        """Store context in database with embedding and local memory system"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -1428,14 +1429,14 @@ Structure your analysis clearly with sections. Start with file paths section lis
         conn.commit()
         conn.close()
 
-        # Store in Mem0 if available
-        if self.use_mem0 and self.mem0_client:
+        # Store in Local Memory System if available
+        if self.use_local_memory and self.local_memory:
             try:
-                # Format content for Mem0 (vision-based description only)
+                # Format content for local memory (vision-based description only)
                 files_info = "\n".join([f"  - {f}" for f in active_context['files'][:10]]) if active_context['files'] else "None"
                 apps_info = ", ".join(active_context['applications'][:10]) if active_context['applications'] else "None"
 
-                mem0_content = f"""Timestamp: {timestamp}
+                memory_content = f"""Timestamp: {timestamp}
 Context ID: {context_id}
 
 Description (from Vision Analysis):
@@ -1449,18 +1450,29 @@ Recently Accessed Files:
 Screenshot: {screenshot_path}
 """
 
-                # Add memory with user_id for per-user separation
-                # MemoryClient.add() expects messages format
-                self.mem0_client.add(mem0_content, user_id=self.user_id)
-                print(f"[{timestamp}] Context stored in local DB and Mem0 platform for user '{self.user_id}'")
+                # Add memory with metadata for rich retrieval
+                memory_metadata = {
+                    "timestamp": timestamp,
+                    "context_id": str(context_id),
+                    "screenshot_path": screenshot_path,
+                    "applications": json.dumps(active_context['applications'][:10]),
+                    "files": json.dumps(active_context['files'][:10])
+                }
+
+                self.local_memory.add_memory(
+                    content=memory_content,
+                    metadata=memory_metadata,
+                    memory_id=f"ctx_{context_id}"
+                )
+                print(f"[{timestamp}] Context stored in local DB and local memory system for user '{self.user_id}'")
             except Exception as e:
-                print(f"⚠️ Failed to store in Mem0 (stored locally): {e}")
+                print(f"⚠️ Failed to store in local memory (stored in SQLite): {e}")
         else:
-            print(f"[{timestamp}] Context stored with embedding (local only, vision-based)")
+            print(f"[{timestamp}] Context stored with embedding (SQLite only, vision-based)")
     
     def _retrieve_relevant_contexts(self, query: str, top_k: int = 10):
         """
-        Retrieve most relevant contexts using RAG with Mem0 graph memory or local embeddings
+        Retrieve most relevant contexts using RAG with local memory system or SQLite embeddings
         Always includes the last N recent contexts plus semantically similar ones
 
         Args:
@@ -1470,16 +1482,16 @@ Screenshot: {screenshot_path}
         Returns:
             List of (id, timestamp, description, active_files, open_applications, screen_text, similarity_score) tuples
         """
-        # If Mem0 is available, use it for faster retrieval with graph memory
-        if self.use_mem0 and self.mem0_client:
-            return self._retrieve_from_mem0(query, top_k)
+        # If Local Memory System is available, use it for fast temporal-aware retrieval
+        if self.use_local_memory and self.local_memory:
+            return self._retrieve_from_local_memory(query, top_k)
 
         # Fallback to local SQLite + embeddings
         return self._retrieve_from_local_db(query, top_k)
 
-    def _retrieve_from_mem0(self, query: str, top_k: int = 10):
+    def _retrieve_from_local_memory(self, query: str, top_k: int = 10):
         """
-        Retrieve contexts from Mem0 Platform (fast, cloud-based retrieval with graph memory)
+        Retrieve contexts from Local Memory System (fast, privacy-focused retrieval with temporal awareness)
 
         Args:
             query: The user's question or current screen content
@@ -1489,117 +1501,46 @@ Screenshot: {screenshot_path}
             List of tuples with context information
         """
         try:
-            print(f"\nSearching Mem0 platform for user '{self.user_id}' with query: '{query[:100]}...'")
+            print(f"\n🔍 Searching local memory for user '{self.user_id}' with query: '{query[:100]}...'")
 
-            # Search using MemoryClient with user_id filter (required by v2 API)
-            # The v2 API requires filters to be provided and cannot be empty
-            filters = {"user_id": self.user_id}
-            response = self.mem0_client.search(query=query, filters=filters, limit=top_k)
+            # Search using LocalMemorySystem with temporal awareness
+            memories = self.local_memory.search_memories(query=query, top_k=top_k)
 
-            # Debug: Check response structure
-            if not response:
-                print("WARNING Empty response from Mem0, falling back to local DB")
+            if not memories:
+                print("⚠️ No memories found in local storage, falling back to SQLite DB")
                 return self._retrieve_from_local_db(query, top_k)
 
-            # Debug: Print actual response structure
-            print(f"DEBUG: Mem0 response type: {type(response)}")
-            print(f"DEBUG: Mem0 response: {response}")
-            
-            # Handle different response formats
-            if isinstance(response, dict):
-                # If response is a dictionary, check for common keys
-                if 'results' in response:
-                    response = response['results']
-                elif 'data' in response:
-                    response = response['data']
-                elif 'memories' in response:
-                    response = response['memories']
-                else:
-                    print("WARNING Unexpected dictionary format from Mem0, falling back to local DB")
-                    return self._retrieve_from_local_db(query, top_k)
-            
-            # Ensure response is a list
-            if not isinstance(response, list):
-                print(f"WARNING Expected list from Mem0, got {type(response)}, falling back to local DB")
-                return self._retrieve_from_local_db(query, top_k)
-            
-            if len(response) > 0:
-                print(f"DEBUG: First item type: {type(response[0])}")
-                print(f"DEBUG: First item keys: {response[0].keys() if isinstance(response[0], dict) else 'N/A'}")
-                print(f"DEBUG: First item sample: {str(response[0])[:200]}")
-
-            # Response format from MemoryClient.search() is a list of memory dictionaries
+            # Convert LocalMemorySystem format to backend format
             results = []
-            for idx, memory in enumerate(response):
-                # Ensure memory is a dictionary
-                if not isinstance(memory, dict):
-                    print(f"WARNING Skipping non-dict memory item {idx}: {type(memory)}")
-                    continue
-                # Extract memory content
-                # MemoryClient returns: {'id': '...', 'memory': 'content', 'user_id': '...', ...}
-                content = memory.get('memory', '') if isinstance(memory, dict) else str(memory)
+            for idx, memory in enumerate(memories):
+                content = memory['content']
+                metadata = memory['metadata']
+                temporal_score = memory['temporal_score']
 
-                # Ensure content is not None
-                if content is None:
-                    content = ""
-
-                # Extract timestamp and description from content
-                timestamp = memory.get('created_at', 'Unknown') if isinstance(memory, dict) else "Unknown"
-                context_id = memory.get('id', f"mem0_{idx}") if isinstance(memory, dict) else f"mem0_{idx}"
-                active_files = "[]"
-                open_apps = "[]"
+                # Parse structured content
+                timestamp = metadata.get('timestamp', 'Unknown')
+                context_id = metadata.get('context_id', f"local_{idx}")
+                active_files = metadata.get('files', "[]")
+                open_apps = metadata.get('applications', "[]")
                 screen_text = ""
 
-                # Initialize description with the full content
-                description = content if content else "No content available"
-
-                # Try to parse structured content (if stored in our format)
-                if content and "Timestamp:" in content:
+                # Extract description from content
+                description = content
+                if "Description (from Vision Analysis):" in content:
                     lines = content.split('\n')
                     for i, line in enumerate(lines):
-                        if line.startswith("Timestamp:"):
-                            timestamp = line.replace("Timestamp:", "").strip()
-                        elif line.startswith("Context ID:"):
-                            context_id = line.replace("Context ID:", "").strip()
-                        elif line.startswith("Description:") or line.startswith("Description (from Vision Analysis):"):
-                            # Get description until next section
+                        if line.startswith("Description (from Vision Analysis):"):
                             desc_start = i + 1
                             desc_lines = []
                             for j in range(desc_start, len(lines)):
-                                if lines[j].startswith("Screen Text:") or lines[j].startswith("Active Applications:") or lines[j].startswith("Recently Accessed"):
-                                    break
-                                desc_lines.append(lines[j])
-                            description = "\n".join(desc_lines).strip()
-                        elif line.startswith("Screen Text:"):
-                            # Get screen text until next section
-                            st_start = i + 1
-                            st_lines = []
-                            for j in range(st_start, len(lines)):
                                 if lines[j].startswith("Active Applications:") or lines[j].startswith("Recently Accessed"):
                                     break
-                                st_lines.append(lines[j])
-                            screen_text = "\n".join(st_lines).strip()
-                        elif line.startswith("Active Applications:"):
-                            # Extract apps info
-                            apps_line = line.replace("Active Applications:", "").strip()
-                            if apps_line and apps_line != "None":
-                                open_apps = json.dumps(apps_line.split(", "))
-                        elif line.startswith("Recently Accessed Files:"):
-                            # Extract files from following lines
-                            files_start = i + 1
-                            file_paths = []
-                            for j in range(files_start, len(lines)):
-                                if lines[j].strip().startswith("-"):
-                                    file_paths.append(lines[j].strip()[1:].strip())
-                                elif lines[j].startswith("Screenshot:") or not lines[j].strip():
-                                    break
-                            if file_paths:
-                                active_files = json.dumps(file_paths)
+                                if lines[j].strip():
+                                    desc_lines.append(lines[j])
+                            description = "\n".join(desc_lines).strip()
+                            break
 
-                # Score from Mem0 (use actual score if available)
-                score = memory.get('score', 0.9 - (idx * 0.05)) if isinstance(memory, dict) else (0.9 - (idx * 0.05))
-
-                # Add to results
+                # Add to results in expected format
                 results.append((
                     context_id,
                     timestamp,
@@ -1607,20 +1548,20 @@ Screenshot: {screenshot_path}
                     active_files,
                     open_apps,
                     screen_text,
-                    score
+                    temporal_score
                 ))
 
-                # Debug: Show what we extracted
-                print(f"  Memory {idx+1}: {description[:100]}... (score: {score:.3f})")
+                # Show what we extracted
+                print(f"  Memory {idx+1}: {description[:100]}... (temporal score: {temporal_score:.3f})")
 
-            print(f"OK Retrieved {len(results)} results from Mem0 platform")
+            print(f"✓ Retrieved {len(results)} results from local memory with temporal awareness")
             return results
 
         except Exception as e:
-            print(f"WARNING Error retrieving from Mem0: {e}")
+            print(f"⚠️ Error retrieving from local memory: {e}")
             import traceback
             traceback.print_exc()
-            print("Falling back to local database...")
+            print("Falling back to SQLite database...")
             return self._retrieve_from_local_db(query, top_k)
 
     def _retrieve_from_local_db(self, query: str, top_k: int = 10):
@@ -2229,7 +2170,7 @@ Be comprehensive and extract all text and information."""
 
     def store_memory(self, content: str, summary: str, importance: str = "medium", tags: List[str] = None) -> str:
         """
-        Store important information to Mem0 graph memory
+        Store important information to local memory with temporal awareness
 
         Args:
             content: The detailed content to store
@@ -2241,10 +2182,10 @@ Be comprehensive and extract all text and information."""
             Success or error message
         """
         try:
-            if not self.use_mem0 or not self.mem0_client:
+            if not self.use_local_memory or not self.local_memory:
                 return json.dumps({
                     "success": False,
-                    "error": "Mem0 not available. Using local storage only."
+                    "error": "Local memory not available. Using SQLite storage only."
                 })
 
             # Format content with metadata
@@ -2259,13 +2200,24 @@ Tags: {tags_str}
 {content}
 """
 
-            # Store to Mem0 Platform with user_id for per-user separation
-            self.mem0_client.add(formatted_content, user_id=self.user_id)
+            # Store to Local Memory System with metadata
+            memory_metadata = {
+                "summary": summary,
+                "importance": importance,
+                "tags": json.dumps(tags) if tags else "[]",
+                "timestamp": timestamp,
+                "type": "ai_stored"
+            }
+
+            memory_id = self.local_memory.add_memory(
+                content=formatted_content,
+                metadata=memory_metadata
+            )
 
             # Also store in local database for backup
             self._store_context_simple(content, summary, importance, tags)
 
-            print(f"\n💾 [AI Decision] Stored memory for user '{self.user_id}': {summary}")
+            print(f"\n💾 [AI Decision] Stored memory locally for user '{self.user_id}': {summary}")
             print(f"   Importance: {importance} | Tags: {tags_str}")
 
             # Emit progress if callback available
@@ -2279,9 +2231,10 @@ Tags: {tags_str}
 
             return json.dumps({
                 "success": True,
-                "message": f"Memory stored successfully in graph memory: {summary}",
+                "message": f"Memory stored successfully in local storage: {summary}",
                 "timestamp": timestamp,
-                "user_id": self.user_id
+                "user_id": self.user_id,
+                "memory_id": memory_id
             })
 
         except Exception as e:
@@ -2896,7 +2849,7 @@ Be detailed and informative."""
     
     def _get_related_memories_for_context(self, active_context, limit=5):
         """Get existing memories related to current context for knowledge building"""
-        if not self.use_mem0 or not self.mem0_client:
+        if not self.use_local_memory or not self.local_memory:
             return []
 
         try:
@@ -2919,13 +2872,18 @@ Be detailed and informative."""
                 query = ' '.join(search_terms)
 
                 # Search existing memories
-                filters = {"user_id": self.user_id}
-                result = self.mem0_client.search(query=query, filters=filters, limit=limit)
+                results = self.local_memory.search_memories(query=query, top_k=limit)
 
-                if isinstance(result, dict) and 'results' in result:
-                    return result['results']
-                elif isinstance(result, list):
-                    return result
+                # Convert to expected format
+                memories = []
+                for result in results:
+                    memories.append({
+                        'content': result['content'],
+                        'metadata': result['metadata'],
+                        'score': result['temporal_score']
+                    })
+
+                return memories
 
             return []
         except Exception as e:
@@ -2984,7 +2942,7 @@ The user works on MULTIPLE DIFFERENT PROJECTS. Your memories must be PROJECT-SPE
 ❌ BAD: "Working on Python code"
 ❌ BAD: "User is coding"
 
-✅ GOOD: "ghost-widget project: PyQt6 desktop app for AI screen capture with mem0 integration. Main file: C:\\projects\\ghost-widget\\main.py. Currently implementing memory card UI with QScrollArea and custom QFrame cards."
+✅ GOOD: "ghost-widget project: PyQt6 desktop app for AI screen capture with local memory storage. Main file: C:\\projects\\ghost-widget\\main.py. Currently implementing memory card UI with QScrollArea and custom QFrame cards."
 
 ✅ GOOD: "api-server project (C:\\work\\api-server): FastAPI backend with PostgreSQL. Working on authentication endpoints in auth.py:125. Implementing JWT token refresh logic with Redis caching."
 
@@ -3326,47 +3284,47 @@ Analyze the screen NOW and make your decision:"""
                         print(f"   💰 Cost optimization: Condensed video = {compression_ratio*100:.1f}% of original")
                         print(f"   💰 Savings: ${savings:.6f} ({savings_percent:.1f}%) per analysis")
 
-                        # CONDENSED VIDEO APPROACH: Always save full video, send condensed to Gemini
+                        # CONDENSED VIDEO APPROACH: Always analyze, prefer condensed if available
+                        # Determine which video to analyze
+                        video_to_analyze = condensed_video_path if (condensed_video_path and frames_kept > 0) else full_video_path
+                        analysis_duration = condensed_duration if (condensed_video_path and frames_kept > 0) else full_duration
+                        analysis_cost = condensed_cost if (condensed_video_path and frames_kept > 0) else full_cost
+
                         if not condensed_video_path or frames_kept == 0:
-                            # No interesting frames at all - skip analysis
-                            print(f"   💰 SKIPPING ANALYSIS - No interesting frames detected")
+                            # No interesting frames - analyze full video instead
+                            print(f"   ⚠️ No interesting frames detected - analyzing full video instead")
                             print(f"   💾 Full video saved for review: {Path(full_video_path).name}")
-
-                            # Track skipped analysis in analytics
-                            if self.analytics:
-                                self.analytics.track_event('analysis_skipped', {
-                                    'skip_rate': skip_rate,
-                                    'frames': frame_count,
-                                    'reason': 'no_interesting_frames'
-                                })
                         else:
-                            # Queue CONDENSED video for background analysis (screen has changed enough)
-                            print(f"   🧠 Queuing condensed video for Gemini analysis...")
+                            # Use condensed video for analysis
+                            print(f"   🧠 Using condensed video for Gemini analysis...")
                             print(f"   💾 Full video saved for review: {Path(full_video_path).name}")
-                            try:
-                                # Check queue size
-                                queue_size = self.analysis_queue.qsize()
-                                if queue_size > 0:
-                                    print(f"   📊 Analysis queue: {queue_size} video(s) waiting")
 
-                                # Add CONDENSED video to queue (not full video!)
-                                self.analysis_queue.put((condensed_video_path, active_context), timeout=2.0)
-                                print(f"   ✅ Condensed video queued for analysis (continuing recording...)")
+                        # Always queue video for analysis (condensed if available, full otherwise)
+                        print(f"   🧠 Queuing video for Gemini analysis...")
+                        try:
+                            # Check queue size
+                            queue_size = self.analysis_queue.qsize()
+                            if queue_size > 0:
+                                print(f"   📊 Analysis queue: {queue_size} video(s) waiting")
 
-                                # Track analysis in analytics with cost savings
-                                if self.analytics:
-                                    self.analytics.track_video_analysis(
-                                        duration_seconds=condensed_duration,
-                                        frames_captured=frame_count,
-                                        frames_skipped=self.frames_skipped,
-                                        cost=condensed_cost
-                                    )
+                            # Add video to queue (condensed if available, full video as fallback)
+                            self.analysis_queue.put((video_to_analyze, active_context), timeout=2.0)
+                            print(f"   ✅ Video queued for analysis (continuing recording...)")
 
-                            except Exception as e:
-                                print(f"   ⚠️ Failed to queue video for analysis: {e}")
-                                # If queue is full or error, analyze synchronously as fallback
-                                print(f"   🧠 Falling back to synchronous analysis...")
-                                self._analyze_video_with_gemini(condensed_video_path, active_context)
+                            # Track analysis in analytics with cost savings
+                            if self.analytics:
+                                self.analytics.track_video_analysis(
+                                    duration_seconds=analysis_duration,
+                                    frames_captured=frame_count,
+                                    frames_skipped=self.frames_skipped,
+                                    cost=analysis_cost
+                                )
+
+                        except Exception as e:
+                            print(f"   ⚠️ Failed to queue video for analysis: {e}")
+                            # If queue is full or error, analyze synchronously as fallback
+                            print(f"   🧠 Falling back to synchronous analysis...")
+                            self._analyze_video_with_gemini(video_to_analyze, active_context)
 
                         # Autonomous content generation (if enabled)
                         if self.autonomous_mode:
@@ -3715,25 +3673,21 @@ Provide clear, concise, step-by-step guidance. Use your tools to access real inf
         count = cursor.fetchone()[0]
         conn.close()
 
-        # Also check mem0 if available
-        mem0_count = 0
-        if count == 0 and self.use_mem0 and self.mem0_client:
+        # Also check local memory if available
+        local_memory_count = 0
+        if count == 0 and self.use_local_memory and self.local_memory:
             try:
-                filters = {"user_id": self.user_id}
-                mem0_result = self.mem0_client.get_all(filters=filters)
-                if isinstance(mem0_result, dict) and 'results' in mem0_result:
-                    mem0_count = len(mem0_result['results'])
-                elif isinstance(mem0_result, list):
-                    mem0_count = len(mem0_result)
+                stats = self.local_memory.get_stats()
+                local_memory_count = stats.get('total_memories', 0)
             except Exception as e:
-                print(f"⚠️ Error checking mem0 memories: {e}")
+                print(f"⚠️ Error checking local memories: {e}")
 
-        if count == 0 and mem0_count == 0:
+        if count == 0 and local_memory_count == 0:
             return "No context stored yet. Start capturing first!"
 
-        # Use mem0 count if local DB is empty
-        if count == 0 and mem0_count > 0:
-            count = mem0_count
+        # Use local memory count if SQLite DB is empty
+        if count == 0 and local_memory_count > 0:
+            count = local_memory_count
 
         print(f"\n{'='*60}")
         print("🤖 PROCESSING YOUR QUESTION")
@@ -4098,25 +4052,21 @@ User Question: {question}"""
         count = cursor.fetchone()[0]
         conn.close()
 
-        # Also check mem0 if available
-        mem0_count = 0
-        if count == 0 and self.use_mem0 and self.mem0_client:
+        # Also check local memory if available
+        local_memory_count = 0
+        if count == 0 and self.use_local_memory and self.local_memory:
             try:
-                filters = {"user_id": self.user_id}
-                mem0_result = self.mem0_client.get_all(filters=filters)
-                if isinstance(mem0_result, dict) and 'results' in mem0_result:
-                    mem0_count = len(mem0_result['results'])
-                elif isinstance(mem0_result, list):
-                    mem0_count = len(mem0_result)
+                stats = self.local_memory.get_stats()
+                local_memory_count = stats.get('total_memories', 0)
             except Exception as e:
-                print(f"⚠️ Error checking mem0 memories: {e}")
+                print(f"⚠️ Error checking local memories: {e}")
 
-        if count == 0 and mem0_count == 0:
+        if count == 0 and local_memory_count == 0:
             return "No context stored yet. Start capturing first!"
 
-        # Use mem0 count if local DB is empty
-        if count == 0 and mem0_count > 0:
-            count = mem0_count
+        # Use local memory count if SQLite DB is empty
+        if count == 0 and local_memory_count > 0:
+            count = local_memory_count
 
         print(f"\n{'='*60}")
         print("🤖 PROCESSING YOUR QUESTION WITH CLAUDE 4.5 SONNET")
@@ -4891,7 +4841,7 @@ If the user asks about:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='AI Background Companion with Content Generation and RAG-based Context Retrieval using Mem0 Graph Memory')
+    parser = argparse.ArgumentParser(description='AI Background Companion with Content Generation and RAG-based Context Retrieval using Local Memory Storage')
     parser.add_argument('mode', choices=['capture', 'query', 'list', 'reindex', 'autonomous'],
                        help='Mode: capture, query, list, reindex, or autonomous')
     parser.add_argument('--api-key', required=True, help='Google Gemini API key')

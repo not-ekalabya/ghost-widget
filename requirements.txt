@@ -13,8 +13,8 @@ google-generativeai>=0.3.0
 # Anthropic Claude on Vertex AI
 anthropic[vertex]>=0.18.0
 
-# Mem0 integration - managed platform with graph memory
-mem0ai
+# Local memory system with vector storage (privacy-focused)
+chromadb>=0.4.0
 
 # GitHub integration
 PyGithub>=2.0.0
