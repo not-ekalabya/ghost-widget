@@ -27,8 +27,9 @@ except ImportError:
     print("Warning: analytics module not available. Usage tracking disabled.")
 
 # Local Memory System (privacy-focused, local-only storage)
+# Using FAISS instead of ChromaDB for stability
 try:
-    from local_memory import LocalMemorySystem
+    from faiss_memory import FAISSMemorySystem
     LOCAL_MEMORY_AVAILABLE = True
 except ImportError:
     LOCAL_MEMORY_AVAILABLE = False
@@ -135,36 +136,22 @@ class BackgroundCompanion:
         self.analysis_running = False
 
         # Initialize Local Memory System (privacy-focused, local-only storage)
+        # Using FAISS instead of ChromaDB for stability on Windows
         self.use_local_memory = LOCAL_MEMORY_AVAILABLE
         self.local_memory = None
         if self.use_local_memory:
             try:
-                # Initialize LocalMemorySystem with temporal awareness
-                self.local_memory = LocalMemorySystem(
+                # Initialize FAISSMemorySystem with temporal awareness
+                self.local_memory = FAISSMemorySystem(
                     api_key=api_key,
                     user_id=self.user_id,
-                    db_path="local_memory_db",  # Local storage directory
+                    db_path="faiss_memory_db",  # Local storage directory
                     temporal_decay_days=30  # Temporal decay over 30 days
                 )
-                print(f"✓ Local memory system initialized for user: {self.user_id}")
-
-                # Verify ChromaDB is working properly (skip verification to avoid hang)
-                # The stats check can hang, so we'll just trust initialization worked
-                print(f"✓ ChromaDB initialized (skipping verification to avoid startup delay)")
-
-                # Optional: Try verification with timeout in background
-                # try:
-                #     stats = self.local_memory.get_stats()
-                #     print(f"✓ ChromaDB verified: {stats.get('total_memories', 0)} memories stored")
-                # except Exception as verify_err:
-                #     print(f"⚠️ ChromaDB verification skipped: {verify_err}")
-                #     # Don't disable - initialization succeeded even if stats failed
-
+                print(f"✓ FAISS memory system ready for user: {self.user_id}")
             except Exception as e:
-                print(f"❌ Failed to initialize ChromaDB: {e}")
+                print(f"❌ Failed to initialize FAISS memory: {e}")
                 print("   Memory storage will NOT work!")
-                print("   Please install ChromaDB: pip install chromadb")
-                print("   And ensure your API key is valid")
                 import traceback
                 traceback.print_exc()
                 self.use_local_memory = False
@@ -721,47 +708,59 @@ class BackgroundCompanion:
                 return False
 
             # Capture screen using mss (faster than PIL) - create fresh instance each time
-            with mss.mss() as sct:
-                monitor = sct.monitors[1]  # Primary monitor
-                screenshot = sct.grab(monitor)
+            try:
+                with mss.mss() as sct:
+                    monitor = sct.monitors[1]  # Primary monitor
+                    screenshot = sct.grab(monitor)
+            except Exception as mss_error:
+                print(f"   ❌ [DEBUG] mss screen capture failed: {mss_error}")
+                raise
 
-                # Convert to numpy array and then to BGR for OpenCV
+            # Convert to numpy array and then to BGR for OpenCV
+            try:
                 frame = np.array(screenshot)
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+            except Exception as convert_error:
+                print(f"   ❌ [DEBUG] Frame conversion failed: {convert_error}")
+                raise
 
-                # Store a copy of the frame in memory for condensed video approach
-                frame_copy = frame.copy()
-                self.all_frames.append(frame_copy)
-                frame_index = len(self.all_frames) - 1
+            # Store a copy of the frame in memory for condensed video approach
+            frame_copy = frame.copy()
+            self.all_frames.append(frame_copy)
+            frame_index = len(self.all_frames) - 1
 
-                # Smart frame detection - compare with previous frame
-                # Use perceptual hashing for efficient comparison
-                frame_hash = self._compute_frame_hash(frame)
+            # Smart frame detection - compare with previous frame
+            # Use perceptual hashing for efficient comparison
+            frame_hash = self._compute_frame_hash(frame)
 
-                is_similar = False
-                if self.last_frame_hash is not None:
-                    similarity = self._compute_hash_similarity(self.last_frame_hash, frame_hash)
+            is_similar = False
+            if self.last_frame_hash is not None:
+                similarity = self._compute_hash_similarity(self.last_frame_hash, frame_hash)
 
-                    # Check if frame is too similar (no significant change)
-                    if similarity > self.frame_similarity_threshold:
-                        self.frames_skipped += 1
-                        is_similar = True
-                        # DON'T update hash for similar frames to maintain comparison baseline
+                # Check if frame is too similar (no significant change)
+                if similarity > self.frame_similarity_threshold:
+                    self.frames_skipped += 1
+                    is_similar = True
+                    # DON'T update hash for similar frames to maintain comparison baseline
 
-                # Only update hash if frame is different
-                if not is_similar:
-                    self.last_frame_hash = frame_hash
-                    # Store this frame as "interesting" for condensed video
-                    self.interesting_frames.append(frame_copy)
-                    self.frames_kept_indices.append(frame_index)
+            # Only update hash if frame is different
+            if not is_similar:
+                self.last_frame_hash = frame_hash
+                # Store this frame as "interesting" for condensed video
+                self.interesting_frames.append(frame_copy)
+                self.frames_kept_indices.append(frame_index)
 
-                # Always write frame to full video writer for continuity
+            # Always write frame to full video writer for continuity
+            try:
                 self.video_writer.write(frame)
+            except Exception as write_error:
+                print(f"   ❌ [DEBUG] video_writer.write() failed: {write_error}")
+                raise
 
             return True
 
         except Exception as e:
-            print(f"Error capturing frame: {e}")
+            print(f"   ❌ [DEBUG] Error in _capture_frame(): {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -1234,27 +1233,39 @@ store_memory(
                                 memory_stored = True
                                 # Call store_memory function
                                 try:
+                                    print(f"   🔄 Preparing to store memory...")
                                     # Convert tags from RepeatedComposite to list if needed
                                     clean_args = dict(function_args)
                                     if 'tags' in clean_args and not isinstance(clean_args['tags'], list):
                                         clean_args['tags'] = list(clean_args['tags'])
 
+                                    print(f"   🔄 Calling store_memory...")
                                     result = self.store_memory(**clean_args)
+
                                     content_preview = clean_args.get('content', '')[:100]
                                     print(f"   ✅ Memory stored: {content_preview}...")
-                                    print(f"   Result: {result}")
+                                    print(f"   📋 Result: {result}")
+
+                                    print(f"   🔄 Creating tool result response...")
                                     tool_results.append({
                                         "function_call": part.function_call,
                                         "function_response": {"result": result}
                                     })
+                                    print(f"   ✅ Tool result created successfully")
+
                                 except Exception as store_error:
-                                    print(f"   ❌ Error storing memory: {store_error}")
+                                    print(f"   ❌❌❌ CRITICAL ERROR storing memory: {store_error}")
                                     import traceback
+                                    print("   Full traceback:")
                                     traceback.print_exc()
-                                    tool_results.append({
-                                        "function_call": part.function_call,
-                                        "function_response": {"error": str(store_error)}
-                                    })
+                                    try:
+                                        tool_results.append({
+                                            "function_call": part.function_call,
+                                            "function_response": {"error": str(store_error)}
+                                        })
+                                    except Exception as e2:
+                                        print(f"   ❌ Even tool_results.append failed: {e2}")
+                                    # Don't re-raise - continue processing
                             else:
                                 # Handle other tool calls using _execute_tool
                                 try:
@@ -1299,15 +1310,28 @@ store_memory(
                         from google.ai.generativelanguage_v1beta.types import content as glm_content
                         response_parts = []
                         for tr in tool_results:
-                            response_parts.append(glm_content.Part(
-                                function_response=glm_content.FunctionResponse(
-                                    name=tr["function_call"].name,
-                                    response=tr["function_response"]
-                                )
-                            ))
-                        response = chat.send_message(response_parts)
+                            try:
+                                response_parts.append(glm_content.Part(
+                                    function_response=glm_content.FunctionResponse(
+                                        name=tr["function_call"].name,
+                                        response=tr["function_response"]
+                                    )
+                                ))
+                            except Exception as part_error:
+                                print(f"   ⚠️ Error creating response part: {part_error}")
+                                # Skip this response part but continue
+
+                        if response_parts:
+                            print(f"   📤 Sending {len(response_parts)} response(s) back to AI...")
+                            response = chat.send_message(response_parts)
+                            print(f"   ✅ AI received responses")
+                        else:
+                            print(f"   ⚠️ No valid response parts to send")
+                            break
                     except Exception as e:
-                        print(f"   ⚠️ Error in multi-turn conversation: {e}")
+                        print(f"   ❌ Error in multi-turn conversation: {e}")
+                        import traceback
+                        traceback.print_exc()
                         break
 
             print(f"   " + "="*60)
@@ -1684,14 +1708,14 @@ Screenshot: {screenshot_path}
         try:
             print(f"\n🔍 Searching local memory for user '{self.user_id}' with query: '{query[:100]}...'")
 
-            # Search using LocalMemorySystem with temporal awareness
+            # Search using FAISS memory system with temporal awareness
             memories = self.local_memory.search_memories(query=query, top_k=top_k)
 
             if not memories:
-                print("⚠️ No memories found in ChromaDB")
+                print("⚠️ No memories found in FAISS")
                 return []
 
-            # Convert LocalMemorySystem format to backend format
+            # Convert FAISS memory format to backend format
             results = []
             for idx, memory in enumerate(memories):
                 content = memory['content']
@@ -2292,7 +2316,7 @@ Be comprehensive and extract all text and information."""
             storage_locations = []
             memory_id = None
 
-            # Try to store in ChromaDB (LocalMemorySystem) first
+            # Try to store in FAISS memory system first
             if self.use_local_memory and self.local_memory:
                 try:
                     # Format content with metadata
@@ -2934,12 +2958,15 @@ Be detailed and informative."""
     def _get_related_memories_for_context(self, active_context, limit=5):
         """Get existing memories related to current context for knowledge building"""
         if not self.use_local_memory or not self.local_memory:
+            print("   ℹ️ Local memory not enabled, skipping related memories search")
             return []
 
         try:
             # Create a search query from active context
             file_list = active_context['files'][:5] if active_context['files'] else []
             apps = active_context['applications'][:3] if active_context['applications'] else []
+
+            print(f"   🔍 Building search query from {len(file_list)} files and {len(apps)} apps")
 
             # Extract project names from file paths
             project_names = set()
@@ -2954,24 +2981,39 @@ Be detailed and informative."""
             search_terms = list(project_names)[:3] + apps[:2]
             if search_terms:
                 query = ' '.join(search_terms)
+                print(f"   🔍 Search query: '{query}'")
 
-                # Search existing memories
-                results = self.local_memory.search_memories(query=query, top_k=limit)
+                # Search existing memories with timeout protection
+                print(f"   🔍 Calling local_memory.search_memories()...")
+                try:
+                    results = self.local_memory.search_memories(query=query, top_k=limit)
+                    print(f"   ✅ Search completed, got {len(results) if results else 0} results")
+                except Exception as search_error:
+                    print(f"   ❌ Search failed: {search_error}")
+                    import traceback
+                    traceback.print_exc()
+                    return []
 
                 # Convert to expected format
                 memories = []
-                for result in results:
-                    memories.append({
-                        'content': result['content'],
-                        'metadata': result['metadata'],
-                        'score': result['temporal_score']
-                    })
+                if results:
+                    for result in results:
+                        memories.append({
+                            'content': result['content'],
+                            'metadata': result['metadata'],
+                            'score': result['temporal_score']
+                        })
+                    print(f"   ✅ Converted {len(memories)} memories to expected format")
 
                 return memories
+            else:
+                print("   ℹ️ No search terms extracted from context")
 
             return []
         except Exception as e:
-            print(f"   ⚠️ Could not retrieve related memories: {e}")
+            print(f"   ❌ Error in _get_related_memories_for_context: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def _ai_analyze_and_store(self, screenshot_path, active_context):
@@ -3332,24 +3374,37 @@ Analyze the screen NOW and make your decision:"""
                     start_time = time.time()
                     frame_count = 0
 
+                    print(f"   🔍 [DEBUG] Starting frame capture loop for {recording_duration} seconds...")
                     while time.time() - start_time < recording_duration and self.running:
                         frame_start = time.time()
 
                         # Capture and write frame
-                        if self._capture_frame():
-                            frame_count += 1
+                        try:
+                            if self._capture_frame():
+                                frame_count += 1
+                                if frame_count % 10 == 0:  # Log every 10 frames
+                                    elapsed_recording = time.time() - start_time
+                                    print(f"   🔍 [DEBUG] Captured {frame_count} frames ({elapsed_recording:.1f}s elapsed)")
+                        except Exception as frame_error:
+                            print(f"   ❌ [DEBUG] Frame capture failed: {frame_error}")
+                            import traceback
+                            traceback.print_exc()
 
                         # Sleep to maintain desired FPS
                         elapsed = time.time() - frame_start
                         sleep_time = max(0, frame_interval - elapsed)
                         time.sleep(sleep_time)
 
+                    print(f"   🔍 [DEBUG] Frame capture loop completed. Total frames: {frame_count}")
+
                     # Calculate skip rate for this recording
                     skip_rate = (self.frames_skipped / frame_count * 100) if frame_count > 0 else 0
                     print(f"   ✅ Recording complete: {frame_count} frames captured ({self.frames_skipped} skipped, {skip_rate:.1f}% skip rate)")
 
                     # Stop recording and get both full and condensed video paths
+                    print(f"   🔍 [DEBUG] Calling _stop_video_recording()...")
                     video_result = self._stop_video_recording()
+                    print(f"   🔍 [DEBUG] _stop_video_recording() returned: {video_result is not None}")
 
                     if video_result:
                         full_video_path = video_result['full_video_path']
@@ -3430,11 +3485,16 @@ Analyze the screen NOW and make your decision:"""
                     time.sleep(5)  # Wait before retrying
 
             except Exception as e:
-                print(f"Error in capture loop: {e}")
+                print(f"❌ [CRITICAL] Error in capture loop: {e}")
+                import traceback
+                traceback.print_exc()
+                print(f"❌ [CRITICAL] Capture loop crashed! Attempting to continue...")
                 import traceback
                 traceback.print_exc()
                 time.sleep(5)
-    
+
+        print(f"❌ [CRITICAL] _capture_loop() has EXITED! self.running={self.running}")
+
     def start(self):
         """Start background capturing"""
         if self.running:
@@ -3776,27 +3836,19 @@ Provide clear, concise, step-by-step guidance. Use your tools to access real inf
 
     def _query_with_gemini(self, question):
         """Query stored context using RAG-based retrieval with Gemini (fallback)"""
-        # Check if ChromaDB is available and has contexts
-        count = 0
-        if self.use_local_memory and self.local_memory:
-            try:
-                stats = self.local_memory.get_stats()
-                count = stats.get('total_memories', 0)
-            except Exception as e:
-                print(f"⚠️ Error checking ChromaDB: {e}")
-
-        if count == 0:
-            return "No memories stored yet in ChromaDB. Start capturing first!"
+        # Skip get_stats() as it can hang on ChromaDB
+        # Just proceed with the query - if no memories exist, search will return empty
+        if not (self.use_local_memory and self.local_memory):
+            return "Local memory system not available. Cannot query memories."
 
         print(f"\n{'='*60}")
         print("🤖 PROCESSING YOUR QUESTION")
         print(f"{'='*60}")
-        print(f"\n🔍 Step 1: Searching through {count} stored contexts...")
+        print(f"\n🔍 Step 1: Searching through stored memories...")
 
         # Emit progress: Memory search started
         self._emit_progress("MEMORY_SEARCH", {
-            "status": "Searching",
-            "count": count
+            "status": "Searching"
         })
 
         # Use RAG to retrieve relevant contexts

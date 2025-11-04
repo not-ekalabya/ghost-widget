@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Tuple, Optional
 from pathlib import Path
 import numpy as np
+import threading
 
 try:
     import chromadb
@@ -59,6 +60,9 @@ class LocalMemorySystem:
         self.db_path = Path(db_path)
         self.temporal_decay_days = temporal_decay_days
 
+        # Thread safety lock for ChromaDB operations
+        self._db_lock = threading.RLock()
+
         # Configure Google AI for embeddings
         genai.configure(api_key='AIzaSyBY6rQz-TCRenrrdXv2uKbE4GTbgHQbLuk')
 
@@ -100,15 +104,19 @@ class LocalMemorySystem:
             Embedding vector or None if generation fails
         """
         try:
+            print(f"   🔍 [LocalMemory] Calling genai.embed_content API...")
             # Use text-embedding-004 for high-quality retrieval embeddings
             result = genai.embed_content(
                 model="models/text-embedding-004",
                 content=text,
                 task_type="retrieval_document"  # Optimized for document storage
             )
+            print(f"   ✅ [LocalMemory] Embedding API call completed")
             return result['embedding']
         except Exception as e:
-            print(f"⚠️ Failed to generate embedding: {e}")
+            print(f"   ⚠️ [LocalMemory] Failed to generate embedding: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def add_memory(self,
@@ -126,39 +134,40 @@ class LocalMemorySystem:
         Returns:
             The ID of the stored memory
         """
-        try:
-            # Generate embedding
-            embedding = self.generate_embedding(content)
-            if not embedding:
-                raise ValueError("Failed to generate embedding")
+        with self._db_lock:  # Thread-safe ChromaDB access
+            try:
+                # Generate embedding
+                embedding = self.generate_embedding(content)
+                if not embedding:
+                    raise ValueError("Failed to generate embedding")
 
-            # Generate ID if not provided
-            if not memory_id:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                memory_id = f"mem_{timestamp}"
+                # Generate ID if not provided
+                if not memory_id:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    memory_id = f"mem_{timestamp}"
 
-            # Prepare metadata
-            if metadata is None:
-                metadata = {}
+                # Prepare metadata
+                if metadata is None:
+                    metadata = {}
 
-            # Add temporal metadata
-            metadata["user_id"] = self.user_id
-            metadata["created_at"] = datetime.now().isoformat()
-            metadata["content_preview"] = content[:200]  # Store preview for debugging
+                # Add temporal metadata
+                metadata["user_id"] = self.user_id
+                metadata["created_at"] = datetime.now().isoformat()
+                metadata["content_preview"] = content[:200]  # Store preview for debugging
 
-            # Store in ChromaDB
-            self.collection.add(
-                ids=[memory_id],
-                embeddings=[embedding],
-                documents=[content],
-                metadatas=[metadata]
-            )
+                # Store in ChromaDB
+                self.collection.add(
+                    ids=[memory_id],
+                    embeddings=[embedding],
+                    documents=[content],
+                    metadatas=[metadata]
+                )
 
-            return memory_id
+                return memory_id
 
-        except Exception as e:
-            print(f"⚠️ Error storing memory: {e}")
-            raise
+            except Exception as e:
+                print(f"⚠️ Error storing memory: {e}")
+                raise
 
     def _calculate_temporal_score(self, created_at: str, base_similarity: float) -> float:
         """
@@ -209,66 +218,83 @@ class LocalMemorySystem:
         Returns:
             List of memory dictionaries with content, metadata, and scores
         """
-        try:
-            # Generate query embedding
-            query_embedding = self.generate_embedding(query)
-            if not query_embedding:
-                print("⚠️ Failed to generate query embedding")
+        with self._db_lock:  # Thread-safe ChromaDB access
+            try:
+                print(f"   🔍 [LocalMemory] Starting search_memories for query: '{query[:50]}...'")
+
+                # Generate query embedding
+                print(f"   🔍 [LocalMemory] Generating query embedding...")
+                query_embedding = self.generate_embedding(query)
+                if not query_embedding:
+                    print("   ⚠️ [LocalMemory] Failed to generate query embedding")
+                    return []
+                print(f"   ✅ [LocalMemory] Query embedding generated")
+
+                # Prepare filters
+                where_filter = {"user_id": self.user_id}
+                if filter_metadata:
+                    where_filter.update(filter_metadata)
+                print(f"   🔍 [LocalMemory] Using filter: {where_filter}")
+
+                # Search ChromaDB (get more results for temporal re-ranking)
+                search_k = min(top_k * 3, 100)  # Get 3x results for re-ranking
+                print(f"   🔍 [LocalMemory] Querying ChromaDB collection for {search_k} results...")
+
+                try:
+                    # Direct query with expectation it might hang
+                    # The lock prevents concurrent access which should help
+                    results = self.collection.query(
+                        query_embeddings=[query_embedding],
+                        n_results=search_k,
+                        where=where_filter,
+                        include=["documents", "metadatas", "distances"]
+                    )
+                    print(f"   ✅ [LocalMemory] ChromaDB query completed")
+                except Exception as query_error:
+                    print(f"   ❌ [LocalMemory] ChromaDB query failed: {query_error}")
+                    import traceback
+                    traceback.print_exc()
+                    return []
+
+                # Process and re-rank results with temporal awareness
+                processed_results = []
+
+                if results and results['ids'] and len(results['ids'][0]) > 0:
+                    for i in range(len(results['ids'][0])):
+                        memory_id = results['ids'][0][i]
+                        content = results['documents'][0][i]
+                        metadata = results['metadatas'][0][i]
+                        distance = results['distances'][0][i]
+
+                        # Convert distance to similarity (ChromaDB uses L2 distance)
+                        # For normalized embeddings, L2 distance relates to cosine similarity
+                        base_similarity = 1.0 / (1.0 + distance)
+
+                        # Apply temporal decay
+                        created_at = metadata.get('created_at', datetime.now().isoformat())
+                        final_score = self._calculate_temporal_score(created_at, base_similarity)
+
+                        processed_results.append({
+                            'id': memory_id,
+                            'content': content,
+                            'metadata': metadata,
+                            'base_similarity': base_similarity,
+                            'temporal_score': final_score,
+                            'created_at': created_at
+                        })
+
+                # Sort by temporal score and return top_k
+                processed_results.sort(key=lambda x: x['temporal_score'], reverse=True)
+                final_results = processed_results[:top_k]
+
+                print(f"✓ Retrieved {len(final_results)} memories (semantic + temporal ranking)")
+                return final_results
+
+            except Exception as e:
+                print(f"⚠️ Error searching memories: {e}")
+                import traceback
+                traceback.print_exc()
                 return []
-
-            # Prepare filters
-            where_filter = {"user_id": self.user_id}
-            if filter_metadata:
-                where_filter.update(filter_metadata)
-
-            # Search ChromaDB (get more results for temporal re-ranking)
-            search_k = min(top_k * 3, 100)  # Get 3x results for re-ranking
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=search_k,
-                where=where_filter,
-                include=["documents", "metadatas", "distances"]
-            )
-
-            # Process and re-rank results with temporal awareness
-            processed_results = []
-
-            if results and results['ids'] and len(results['ids'][0]) > 0:
-                for i in range(len(results['ids'][0])):
-                    memory_id = results['ids'][0][i]
-                    content = results['documents'][0][i]
-                    metadata = results['metadatas'][0][i]
-                    distance = results['distances'][0][i]
-
-                    # Convert distance to similarity (ChromaDB uses L2 distance)
-                    # For normalized embeddings, L2 distance relates to cosine similarity
-                    base_similarity = 1.0 / (1.0 + distance)
-
-                    # Apply temporal decay
-                    created_at = metadata.get('created_at', datetime.now().isoformat())
-                    final_score = self._calculate_temporal_score(created_at, base_similarity)
-
-                    processed_results.append({
-                        'id': memory_id,
-                        'content': content,
-                        'metadata': metadata,
-                        'base_similarity': base_similarity,
-                        'temporal_score': final_score,
-                        'created_at': created_at
-                    })
-
-            # Sort by temporal score and return top_k
-            processed_results.sort(key=lambda x: x['temporal_score'], reverse=True)
-            final_results = processed_results[:top_k]
-
-            print(f"✓ Retrieved {len(final_results)} memories (semantic + temporal ranking)")
-            return final_results
-
-        except Exception as e:
-            print(f"⚠️ Error searching memories: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
 
     def get_recent_memories(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
@@ -358,19 +384,20 @@ class LocalMemorySystem:
         Returns:
             Dictionary with memory statistics
         """
-        try:
-            count = self.collection.count()
+        with self._db_lock:  # Thread-safe ChromaDB access
+            try:
+                count = self.collection.count()
 
-            return {
-                'total_memories': count,
-                'user_id': self.user_id,
-                'storage_path': str(self.db_path.absolute()),
-                'temporal_decay_days': self.temporal_decay_days
-            }
+                return {
+                    'total_memories': count,
+                    'user_id': self.user_id,
+                    'storage_path': str(self.db_path.absolute()),
+                    'temporal_decay_days': self.temporal_decay_days
+                }
 
-        except Exception as e:
-            print(f"⚠️ Error getting stats: {e}")
-            return {}
+            except Exception as e:
+                print(f"⚠️ Error getting stats: {e}")
+                return {}
 
 
 if __name__ == "__main__":

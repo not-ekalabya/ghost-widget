@@ -22,6 +22,10 @@ from pathlib import Path
 from queue import Queue, Empty
 from html import escape
 import datetime
+import faulthandler
+
+# Enable faulthandler to catch segfaults and print traceback
+faulthandler.enable()
 
 # Try importing markdown library
 try:
@@ -200,10 +204,11 @@ def format_progress_html(event_type, data):
     }
 
     if event_type == "MEMORY_SEARCH":
-        return f"<span style='color: #71717A; font-size: 11px;'>🔍 Searching {data['count']} contexts...</span>"
+        return f"<span style='color: #71717A; font-size: 11px;'>🔍 Searching memories...</span>"
     elif event_type == "MEMORY_RETRIEVED":
         contexts = data.get('contexts', [])
-        html = f"<span style='color: #10B981; font-size: 11px;'>📊 Retrieved {data['count']} contexts</span><br>"
+        count = data.get('count', len(contexts))
+        html = f"<span style='color: #10B981; font-size: 11px;'>📊 Retrieved {count} contexts</span><br>"
         # Add sub-items for top contexts
         for ts, sim in contexts[:3]:  # Show top 3
             marker = "📌" if sim == 1.0 else f"🎯 {sim:.3f}"
@@ -243,8 +248,25 @@ def hotkey_listener():
     def on_activate():
         _hotkey_queue.put(("TOGGLE_VISIBILITY", time.time()))
 
-    with keyboard.GlobalHotKeys({HOTKEY_COMBO: on_activate}) as h:
-        h.join()
+    # Retry loop in case pynput crashes (known Windows issue)
+    retry_count = 0
+    max_retries = 3
+    while retry_count < max_retries:
+        try:
+            print(f"Global hotkey listener started ({HOTKEY_COMBO}) to toggle overlay visibility.")
+            with keyboard.GlobalHotKeys({HOTKEY_COMBO: on_activate}) as h:
+                h.join()
+            # If join() returns normally, break
+            break
+        except Exception as e:
+            retry_count += 1
+            print(f"⚠️ Hotkey listener crashed (attempt {retry_count}/{max_retries}): {e}")
+            if retry_count < max_retries:
+                print(f"   Restarting hotkey listener in 2 seconds...")
+                time.sleep(2)
+            else:
+                print(f"   Hotkey listener disabled after {max_retries} crashes. Overlay toggle unavailable.")
+                break
 
 CONFIG_PATH = Path.home() / ".background_companion_overlay_config.json"
 
@@ -3730,9 +3752,12 @@ def main():
     w.move(geo.x() + geo.width() - w.width() - 40, geo.y() + (geo.height() - w.height()) // 2)
     w.show()
 
-    # Start the global hotkey listener in a daemon thread
-    hk_thread = threading.Thread(target=hotkey_listener, daemon=True, name="HotkeyThread")
-    hk_thread.start()
+    # TEMPORARILY DISABLED: Global hotkey listener causes access violations on Windows
+    # This is a known issue with pynput library when used alongside Qt
+    # TODO: Replace with a more stable hotkey library or run in separate process
+    # hk_thread = threading.Thread(target=hotkey_listener, daemon=True, name="HotkeyThread")
+    # hk_thread.start()
+    print("ℹ️ Global hotkey listener disabled (known crash issue with pynput on Windows)")
 
     # Poll the queue every few ms to toggle visibility
     def poll_hotkey_queue():
