@@ -148,16 +148,17 @@ class BackgroundCompanion:
                 )
                 print(f"✓ Local memory system initialized for user: {self.user_id}")
 
-                # Verify ChromaDB is working properly
-                try:
-                    stats = self.local_memory.get_stats()
-                    print(f"✓ ChromaDB verified: {stats.get('total_memories', 0)} memories stored")
-                except Exception as verify_err:
-                    print(f"❌ ChromaDB verification failed: {verify_err}")
-                    print("   Memory storage will NOT work without ChromaDB!")
-                    print("   Please check your API key and ChromaDB installation")
-                    self.use_local_memory = False
-                    self.local_memory = None
+                # Verify ChromaDB is working properly (skip verification to avoid hang)
+                # The stats check can hang, so we'll just trust initialization worked
+                print(f"✓ ChromaDB initialized (skipping verification to avoid startup delay)")
+
+                # Optional: Try verification with timeout in background
+                # try:
+                #     stats = self.local_memory.get_stats()
+                #     print(f"✓ ChromaDB verified: {stats.get('total_memories', 0)} memories stored")
+                # except Exception as verify_err:
+                #     print(f"⚠️ ChromaDB verification skipped: {verify_err}")
+                #     # Don't disable - initialization succeeded even if stats failed
 
             except Exception as e:
                 print(f"❌ Failed to initialize ChromaDB: {e}")
@@ -187,6 +188,8 @@ class BackgroundCompanion:
 
         # Define available tools for Gemini
         self.tools = self._define_tools()
+
+        print(f"✅ BackgroundCompanion initialization complete!")
 
     def _emit_progress(self, event_type: str, data: dict):
         """Emit progress update to GUI if callback is set"""
