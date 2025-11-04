@@ -469,57 +469,73 @@ class CompanionRunner(threading.Thread):
                         pass
 
     def _get_memories(self):
-        """Get all memories from the companion's mem0 client"""
+        """Get all memories from the companion's FAISS memory system"""
         if not self.companion:
             return []
 
         try:
-            # Check if companion has mem0_client
-            if hasattr(self.companion, 'mem0_client') and self.companion.mem0_client:
-                user_id = getattr(self.companion, 'user_id', 'default_user')
-                # Get all memories for this user - mem0 API v2 requires filters parameter
-                filters = {"user_id": user_id}
-                result = self.companion.mem0_client.get_all(filters=filters)
+            # Check if companion has local_memory (FAISS)
+            if hasattr(self.companion, 'local_memory') and self.companion.local_memory:
+                # Get recent memories from FAISS
+                memories = self.companion.local_memory.get_recent_memories(limit=100)
 
-                # mem0 returns a dict with 'results' key containing list of memories
-                if isinstance(result, dict) and 'results' in result:
-                    return result['results']
-                elif isinstance(result, list):
-                    return result
-                else:
-                    return []
+                # Convert FAISS format to UI format
+                ui_memories = []
+                for mem in memories:
+                    ui_memories.append({
+                        'id': mem['id'],
+                        'memory': mem['content'],
+                        'metadata': mem.get('metadata', {}),
+                        'created_at': mem.get('created_at', ''),
+                        'score': mem.get('temporal_score', 1.0)
+                    })
+
+                return ui_memories
             else:
-                print("⚠️ mem0_client not available")
+                print("⚠️ FAISS memory system not available")
                 return []
         except Exception as e:
             print(f"Error getting memories: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def _search_memories(self, query: str):
-        """Search memories using mem0 search functionality"""
+        """Search memories using FAISS semantic search"""
         if not self.companion:
             return []
 
         try:
-            # Check if companion has mem0_client
-            if hasattr(self.companion, 'mem0_client') and self.companion.mem0_client:
+            # Check if companion has local_memory (FAISS)
+            if hasattr(self.companion, 'local_memory') and self.companion.local_memory:
                 user_id = getattr(self.companion, 'user_id', 'default_user')
-                # Search memories for this user - mem0 API requires filters parameter
-                filters = {"user_id": user_id}
-                result = self.companion.mem0_client.search(query=query, filters=filters, limit=50)
+                # Search memories with user_id filter
+                filter_metadata = {"user_id": user_id}
+                memories = self.companion.local_memory.search_memories(
+                    query=query,
+                    top_k=50,
+                    filter_metadata=filter_metadata
+                )
 
-                # mem0 returns a dict with 'results' key containing list of memories
-                if isinstance(result, dict) and 'results' in result:
-                    return result['results']
-                elif isinstance(result, list):
-                    return result
-                else:
-                    return []
+                # Convert FAISS format to UI format
+                ui_memories = []
+                for mem in memories:
+                    ui_memories.append({
+                        'id': mem['id'],
+                        'memory': mem['content'],
+                        'metadata': mem.get('metadata', {}),
+                        'created_at': mem.get('created_at', ''),
+                        'score': mem.get('temporal_score', 1.0)
+                    })
+
+                return ui_memories
             else:
-                print("⚠️ mem0_client not available")
+                print("⚠️ FAISS memory system not available")
                 return []
         except Exception as e:
             print(f"Error searching memories: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def _delete_memory(self, memory_id: str):
@@ -528,17 +544,22 @@ class CompanionRunner(threading.Thread):
             return False
 
         try:
-            # Check if companion has mem0_client
-            if hasattr(self.companion, 'mem0_client') and self.companion.mem0_client:
-                # Delete the memory
-                self.companion.mem0_client.delete(memory_id)
-                print(f"✅ Deleted memory: {memory_id}")
-                return True
+            # Check if companion has local_memory (FAISS)
+            if hasattr(self.companion, 'local_memory') and self.companion.local_memory:
+                # Delete the memory from FAISS
+                success = self.companion.local_memory.delete_memory(memory_id)
+                if success:
+                    print(f"✅ Deleted memory: {memory_id}")
+                else:
+                    print(f"⚠️ Failed to delete memory: {memory_id}")
+                return success
             else:
-                print("⚠️ mem0_client not available")
+                print("⚠️ FAISS memory system not available")
                 return False
         except Exception as e:
             print(f"Error deleting memory: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
 
