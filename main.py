@@ -1061,7 +1061,7 @@ class OverlayWindow(QWidget):
         # self.status_dot.setStyleSheet("color: #6B7280; font-size: 16px;")
         # title_h.addWidget(self.status_dot)
 
-        title_lbl = QLabel("Ghost - What da Hail")
+        title_lbl = QLabel("Ghost")
         title_lbl.setObjectName("titleLabel")
         title_font = QFont()
         title_font.setPointSize(15)

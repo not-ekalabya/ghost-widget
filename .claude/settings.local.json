@@ -26,7 +26,13 @@
       "Bash(git remote:*)",
       "Bash(where gh:*)",
       "Bash(git branch:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(nul)",
+      "Bash(if exist companion_memory.db echo Found: companion_memory.db)",
+      "Bash(if exist local_memory_db echo Found: local_memory_db directory)",
+      "Bash(for line in 3334 3534 3913 4645 4669)",
+      "Bash(do echo \"=== Line $line ===\")",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []

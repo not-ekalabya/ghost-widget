@@ -1,7 +1,6 @@
 import os
 import time
 import json
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 import google.generativeai as genai
@@ -60,14 +59,13 @@ except ImportError:
     print("Warning: GitHub integration not available. Install with: pip install PyGithub")
 
 class BackgroundCompanion:
-    def __init__(self, api_key, capture_interval=10, db_path="companion_memory.db", watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini", recording_fps=1, analysis_interval=40, skip_static_threshold=70.0, save_recordings=False):
+    def __init__(self, api_key, capture_interval=10, watch_dirs=None, always_recent=3, autonomous_mode=False, autonomous_interval=180, autonomous_output="autonomous_content.txt", user_id="default_user", progress_callback=None, qa_model="gemini", recording_fps=1, analysis_interval=40, skip_static_threshold=70.0, save_recordings=False):
         """
         Initialize the background companion with RAG support and autonomous content generation
 
         Args:
             api_key: Google Gemini API key
             capture_interval: DEPRECATED - use analysis_interval instead
-            db_path: Path to SQLite database
             watch_dirs: List of directories to watch for file context
             always_recent: Number of most recent contexts to always include (default: 3)
             autonomous_mode: Whether to run in autonomous mode
@@ -90,7 +88,6 @@ class BackgroundCompanion:
         self.capture_interval = analysis_interval if analysis_interval else capture_interval  # Backward compatibility
         self.analysis_interval = analysis_interval if analysis_interval else capture_interval
         self.recording_fps = recording_fps
-        self.db_path = db_path
         self.running = False
         self.video_dir = Path("recordings")
         self.video_dir.mkdir(exist_ok=True)
@@ -150,10 +147,27 @@ class BackgroundCompanion:
                     temporal_decay_days=30  # Temporal decay over 30 days
                 )
                 print(f"✓ Local memory system initialized for user: {self.user_id}")
+
+                # Verify ChromaDB is working properly
+                try:
+                    stats = self.local_memory.get_stats()
+                    print(f"✓ ChromaDB verified: {stats.get('total_memories', 0)} memories stored")
+                except Exception as verify_err:
+                    print(f"❌ ChromaDB verification failed: {verify_err}")
+                    print("   Memory storage will NOT work without ChromaDB!")
+                    print("   Please check your API key and ChromaDB installation")
+                    self.use_local_memory = False
+                    self.local_memory = None
+
             except Exception as e:
-                print(f"⚠️ Failed to initialize local memory: {e}")
-                print("   Falling back to SQLite database only")
+                print(f"❌ Failed to initialize ChromaDB: {e}")
+                print("   Memory storage will NOT work!")
+                print("   Please install ChromaDB: pip install chromadb")
+                print("   And ensure your API key is valid")
+                import traceback
+                traceback.print_exc()
                 self.use_local_memory = False
+                self.local_memory = None
 
         # Initialize Claude for question answering (via Vertex AI)
         self.claude_client = None
@@ -171,9 +185,6 @@ class BackgroundCompanion:
                 print("   Falling back to Gemini for question answering")
                 self.claude_client = None
 
-        # Initialize database (fallback for local storage)
-        self._init_database()
-
         # Define available tools for Gemini
         self.tools = self._define_tools()
 
@@ -184,45 +195,6 @@ class BackgroundCompanion:
                 self.progress_callback(event_type, data)
             except Exception as e:
                 print(f"Error in progress callback: {e}")
-
-    def _init_database(self):
-        """Create database schema with embeddings support"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS context_snapshots (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                screenshot_path TEXT,
-                description TEXT NOT NULL,
-                active_window TEXT,
-                active_files TEXT,
-                open_applications TEXT,
-                tags TEXT,
-                embedding BLOB,
-                created_at TEXT NOT NULL,
-                screen_text TEXT
-            )
-        ''')
-        
-        # Migrate existing database: add embedding and screen_text columns if they don't exist
-        try:
-            cursor.execute("SELECT embedding FROM context_snapshots LIMIT 1")
-        except sqlite3.OperationalError:
-            print("Migrating database: adding embedding column...")
-            cursor.execute("ALTER TABLE context_snapshots ADD COLUMN embedding BLOB")
-            print("✅ Database migration complete!")
-        
-        try:
-            cursor.execute("SELECT screen_text FROM context_snapshots LIMIT 1")
-        except sqlite3.OperationalError:
-            print("Migrating database: adding screen_text column...")
-            cursor.execute("ALTER TABLE context_snapshots ADD COLUMN screen_text TEXT")
-            print("✅ Database migration complete!")
-        
-        conn.commit()
-        conn.close()
     
     def _define_tools(self):
         """Define tools for Gemini function calling"""
@@ -868,7 +840,63 @@ class BackgroundCompanion:
             # Only save videos to disk if save_recordings is enabled
             if not self.save_recordings:
                 print(f"   ℹ️ Recording saving disabled. Videos kept in memory only (set save_recordings=True to enable saving)")
-                # Return stats without saving
+
+                # Still need to create a TEMPORARY video for Gemini analysis
+                # Use interesting frames if we have any, otherwise use all frames
+                frames_to_analyze = self.interesting_frames if frames_kept > 0 else self.all_frames
+
+                if frames_to_analyze:
+                    # Get frame dimensions
+                    height, width = frames_to_analyze[0].shape[:2]
+
+                    # Determine codec/container based on platform
+                    import platform
+                    is_windows = platform.system() == 'Windows'
+
+                    if is_windows:
+                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                        extension = '.mp4'
+                    else:
+                        fourcc = cv2.VideoWriter_fourcc(*'avc1')
+                        extension = '.mp4'
+
+                    # Create temporary video file for analysis
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    temp_video_path = self.video_dir / f"temp_analysis_{timestamp}{extension}"
+                    print(f"   📹 Creating temporary video for analysis...")
+
+                    temp_writer = cv2.VideoWriter(
+                        str(temp_video_path),
+                        fourcc,
+                        self.recording_fps,
+                        (width, height)
+                    )
+
+                    if temp_writer.isOpened():
+                        for frame in frames_to_analyze:
+                            temp_writer.write(frame)
+                        temp_writer.release()
+
+                        # Verify temp video
+                        if self._verify_video(temp_video_path):
+                            print(f"   ✅ Temporary video created for analysis")
+                            # Return temp video path for analysis
+                            return {
+                                'full_video_path': None,  # No saved full video
+                                'condensed_video_path': str(temp_video_path),  # Temp video for analysis
+                                'frames_total': frames_total,
+                                'frames_kept': frames_kept,
+                                'frames_skipped': frames_skipped,
+                                'skip_rate': skip_rate,
+                                'compression_ratio': compression_ratio,
+                                'is_temp': True  # Flag to indicate this should be deleted after analysis
+                            }
+                        else:
+                            print(f"   ⚠️ Temporary video verification failed")
+                    else:
+                        print(f"   ❌ Failed to create temporary video")
+
+                # Fallback: return None if temp video creation failed
                 return {
                     'full_video_path': None,
                     'condensed_video_path': None,
@@ -999,7 +1027,7 @@ class BackgroundCompanion:
             print(f"   ⚠️ Video verification error: {e}")
             return False
 
-    def _analyze_video_with_gemini(self, video_path, active_context):
+    def _analyze_video_with_gemini(self, video_path, active_context, is_temp_file=False):
         """
         Analyze a video recording using Gemini Flash with vision capabilities.
         Uses Gemini's native video understanding to analyze the recording.
@@ -1047,7 +1075,7 @@ class BackgroundCompanion:
                 tools=self.tools
             )
 
-            prompt = f"""You are an advanced AI memory system analyzing the user's screen recording. Your job is to perform a COMPREHENSIVE analysis of this video and determine if it contains information worth storing as a long-term memory.
+            prompt = f"""You are an advanced AI memory system analyzing the user's screen recording. Your PRIMARY DIRECTIVE is to STORE EVERYTHING related to work, coding, or learning - whether active or passive.
 
 **Recording Duration:** Approximately {self.analysis_interval} seconds
 **Active Applications:** {apps_info}
@@ -1056,14 +1084,33 @@ class BackgroundCompanion:
 {file_info}
 {existing_memories_str}
 
+**🎯 CRITICAL DIRECTIVE: STORE ALL WORK-RELATED ACTIVITY**
+
+You must be AGGRESSIVE about storing memories. The user wants ALL work captured, including:
+- ✅ Reading/reviewing code (VERY IMPORTANT - most of coding is reading!)
+- ✅ Viewing documentation or tutorials
+- ✅ Looking at files, even without editing
+- ✅ Navigating project structure to understand it
+- ✅ Observing errors or debugging output
+- ✅ Any IDE, terminal, or development tool visible
+- ✅ Reviewing pull requests, issues, or designs
+- ✅ Planning or thinking about code (visible through open files/tabs)
+
+**ONLY SKIP if the video shows:**
+- ❌ Completely idle/blank screen with NO work-related content
+- ❌ Pure entertainment (videos, games, social media with no work context)
+- ❌ Generic desktop with absolutely no development tools or files visible
+
+**IF IN DOUBT, STORE IT!** Better to have too many memories than miss important context.
+
 **VIDEO ANALYSIS INSTRUCTIONS:**
 
-Analyze this screen recording and extract meaningful information. Videos provide BETTER CONTEXT than static screenshots because you can see:
+Videos provide BETTER CONTEXT than static screenshots because you can see:
 - Workflow patterns and sequences of actions
-- Code being written or edited over time
+- Code being read, understood, or navigated
 - Error resolution processes
 - Navigation patterns through applications
-- Continuous changes in content
+- Which parts of code the user focuses on
 
 **CRITICAL: PROJECT-SPECIFIC ANALYSIS**
 
@@ -1071,70 +1118,200 @@ The user works on MULTIPLE DIFFERENT PROJECTS. Your memories must be PROJECT-SPE
 
 ❌ BAD: "User project path is C:\\Projects\\app"
 ❌ BAD: "Working on Python code"
-✅ GOOD: "ghost-widget project: PyQt6 desktop app for AI screen capture. Implementing video recording feature in backend.py using opencv and mss library at 1 FPS."
+❌ BAD: "Viewing code files"
+✅ GOOD: "ghost-widget project: User reading backend.py video analysis implementation. Focused on _analyze_video_with_gemini method which uses Gemini Flash Lite for video understanding. Project is a PyQt6 desktop app for AI-powered screen capture with ChromaDB for memory storage."
 
 **PROJECT IDENTIFICATION REQUIREMENTS:**
 1. Extract project name from paths visible in video
 2. Identify project type (web app, desktop app, API, etc.)
-3. Note key technologies/frameworks used
-4. Describe SPECIFIC work being done (which file, which function, what problem)
-5. Track changes over time in the video
+3. Note key technologies/frameworks used (from imports, file names, visible code)
+4. Describe SPECIFIC work being done (which file, which function, what section of code)
+5. Note what the user is LOOKING AT or FOCUSING ON (this is crucial for understanding!)
 
-**YOU HAVE TOOLS - USE THEM BEFORE STORING!**
+**YOU HAVE TOOLS - USE THEM TO ENRICH MEMORIES!**
 
-Available tools:
-- `read_file_as_text`: Read code files to understand project structure and content
-- `list_directory`: Explore project directories
+BEFORE storing, use tools to gather MORE CONTEXT:
+- `read_file_as_text`: Read the actual code file the user is viewing
+- `list_directory`: See project structure and related files
 - `get_file_info`: Get file metadata
-- All other file system tools
 
-**WHEN TO STORE MEMORIES:**
-Store if the video shows:
-1. Active code work (writing, editing, debugging)
-2. Learning new concepts (documentation, tutorials)
-3. Problem-solving (errors, debugging, testing)
-4. Configuration/setup work
-5. File/project structure visible
-6. Meaningful workflow patterns
+This makes your memories MUCH MORE VALUABLE!
 
-**WHEN NOT TO STORE:**
-Skip if the video shows:
-- Idle/blank screen
-- Just browsing (no active work)
-- Entertainment/social media
-- Generic desktop with no meaningful activity
+**IMPORTANCE CLASSIFICATION:**
+
+ALWAYS use "high" importance for now (testing purposes).
+The classification system exists but is not currently used:
+- **"high"**: All work-related activity (ALWAYS USE THIS)
+- **"medium"**: (Not currently used)
+- **"low"**: (Not currently used)
 
 **STORAGE FORMAT:**
-Use the `store_memory` tool with:
-- **memory**: Detailed, project-specific description
-- **metadata**: {{"category": "code|learning|debugging|config", "project": "project-name", "files": ["file1", "file2"]}}
 
-Now analyze this video and decide whether to store memory."""
+ALWAYS use the `store_memory` tool for ANY work-related content:
+- **content**: VERY detailed, project-specific description. Include:
+  - Exact file names and paths
+  - Function/class names visible
+  - What code sections user is viewing/editing
+  - Technologies/libraries spotted
+  - User's apparent goal or focus
+  - Any errors, outputs, or interesting patterns
+- **summary**: One-sentence summary (e.g., "Reading video analysis implementation in ghost-widget backend")
+- **importance**: "low", "medium", or "high" based on activity type
+- **tags**: Comprehensive list of tags (project name, file names, technologies, concepts)
 
-            # Analyze video with Gemini
-            response = model_with_tools.generate_content([video_file, prompt])
+Example for PASSIVE work (reading code):
+store_memory(
+    content="ghost-widget project: User reading and analyzing backend.py implementation. Focused on _analyze_video_with_gemini method (lines 1030-1280) which handles video upload to Gemini API, processes tool calls for memory storage, and supports multi-turn conversations. User appears to be understanding how video analysis and memory storage integration works. Project uses google-generativeai SDK, ChromaDB for vector storage, and implements temporal-aware memory retrieval.",
+    summary="Reading video analysis and memory storage implementation in ghost-widget backend.py",
+    importance="high",
+    tags=["python", "ghost-widget", "backend", "video-analysis", "gemini-api", "chromadb", "code-reading"]
+)
 
-            # Handle tool calls (store_memory, file operations, etc.)
-            if response.candidates[0].content.parts:
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, 'function_call') and part.function_call:
-                        function_name = part.function_call.name
-                        function_args = dict(part.function_call.args)
+Example for ACTIVE work (editing code):
+store_memory(
+    content="ghost-widget project: User modifying _store_context method in backend.py to store exclusively in ChromaDB, removing SQLite dependency. Editing lines around 1385-1435, removing conn.execute() calls and replacing with local_memory.add_memory(). Testing temporal-aware memory storage with metadata including timestamp, context_id, and screenshot_path.",
+    summary="Removing SQLite dependency from ghost-widget backend, switching to ChromaDB-only storage",
+    importance="high",
+    tags=["python", "ghost-widget", "backend", "chromadb", "database-migration", "code-editing", "refactoring"]
+)
 
-                        print(f"   🔧 AI calling tool: {function_name}")
+**NOW ANALYZE AND STORE:**
 
-                        # Execute the tool call
-                        if function_name == "store_memory":
-                            # Call store_memory function
-                            result = self.store_memory(**function_args)
-                            print(f"   ✅ Memory stored: {function_args.get('memory', '')[:100]}...")
-                        else:
-                            # Handle other tool calls
-                            tool_function = getattr(self, function_name, None)
-                            if tool_function:
-                                result = tool_function(**function_args)
-                    elif hasattr(part, 'text') and part.text:
-                        print(f"   💭 AI: {part.text[:150]}...")
+1. Analyze what the user is viewing/doing in the video
+2. If you see code files, IDE, or development tools: You MUST call store_memory!
+3. Use read_file_as_text or list_directory ONLY ONCE if needed for context
+4. After getting context (or if not needed), IMMEDIATELY call store_memory with importance="high"
+
+**CRITICAL**: If this video shows ANY development work (code visible, IDE open, terminal, etc.), you MUST call store_memory before finishing. Do NOT just explore files and then stop - you must STORE what you learned!"""
+
+            # Analyze video with Gemini - support multi-turn tool calling
+            print(f"   🤖 Sending video to Gemini for analysis...")
+
+            # Start a chat for multi-turn tool calling
+            chat = model_with_tools.start_chat()
+            response = chat.send_message([video_file, prompt])
+
+            print(f"\n   📋 VIDEO ANALYSIS RESULTS:")
+            print(f"   " + "="*60)
+
+            # Handle multi-turn tool calling (AI can call tools, see results, then decide to store)
+            memory_stored = False
+            max_turns = 5  # Prevent infinite loops
+            turn_count = 0
+
+            while turn_count < max_turns:
+                turn_count += 1
+                tool_calls_made = False
+                text_responses = []
+                tool_results = []
+
+                if response.candidates[0].content.parts:
+                    for part in response.candidates[0].content.parts:
+                        if hasattr(part, 'function_call') and part.function_call:
+                            tool_calls_made = True
+                            function_name = part.function_call.name
+                            function_args = dict(part.function_call.args)
+
+                            print(f"   🔧 AI calling tool: {function_name}")
+                            # Convert function_args to dict safely (handle protobuf types)
+                            try:
+                                safe_args = {}
+                                for key, value in function_args.items():
+                                    if isinstance(value, (list, tuple)):
+                                        safe_args[key] = list(value)
+                                    else:
+                                        safe_args[key] = value
+                                print(f"   📝 Tool arguments: {json.dumps(safe_args, indent=2)[:200]}...")
+                            except Exception:
+                                # Fallback to str representation
+                                print(f"   📝 Tool arguments: {str(function_args)[:200]}...")
+
+                            # Execute the tool call
+                            if function_name == "store_memory":
+                                memory_stored = True
+                                # Call store_memory function
+                                try:
+                                    # Convert tags from RepeatedComposite to list if needed
+                                    clean_args = dict(function_args)
+                                    if 'tags' in clean_args and not isinstance(clean_args['tags'], list):
+                                        clean_args['tags'] = list(clean_args['tags'])
+
+                                    result = self.store_memory(**clean_args)
+                                    content_preview = clean_args.get('content', '')[:100]
+                                    print(f"   ✅ Memory stored: {content_preview}...")
+                                    print(f"   Result: {result}")
+                                    tool_results.append({
+                                        "function_call": part.function_call,
+                                        "function_response": {"result": result}
+                                    })
+                                except Exception as store_error:
+                                    print(f"   ❌ Error storing memory: {store_error}")
+                                    import traceback
+                                    traceback.print_exc()
+                                    tool_results.append({
+                                        "function_call": part.function_call,
+                                        "function_response": {"error": str(store_error)}
+                                    })
+                            else:
+                                # Handle other tool calls using _execute_tool
+                                try:
+                                    result = self._execute_tool(function_name, function_args)
+                                    result_preview = str(result)[:300] if result else "None"
+                                    print(f"   ✅ Tool executed: {function_name}")
+                                    print(f"   📤 Tool result: {result_preview}...")
+                                    tool_results.append({
+                                        "function_call": part.function_call,
+                                        "function_response": {"result": str(result)[:500]}
+                                    })
+                                except Exception as e:
+                                    print(f"   ❌ Tool error ({function_name}): {e}")
+                                    import traceback
+                                    traceback.print_exc()
+                                    tool_results.append({
+                                        "function_call": part.function_call,
+                                        "function_response": {"error": str(e)}
+                                    })
+                        elif hasattr(part, 'text') and part.text:
+                            text_responses.append(part.text)
+                            print(f"   💭 AI Response: {part.text[:200]}...")
+
+                # If no tools were called, we're done
+                if not tool_calls_made:
+                    if not memory_stored:
+                        print(f"   ⚠️ AI decided not to store memory for this video")
+                        if text_responses:
+                            full_response = "\n".join(text_responses)
+                            print(f"   📝 Reasoning: {full_response[:300]}...")
+                    break
+
+                # If store_memory was called, we're done
+                if memory_stored:
+                    break
+
+                # Send tool results back to the model for next turn
+                if tool_results:
+                    print(f"   🔄 Sending tool results back to AI for next decision...")
+                    try:
+                        # Create function response parts
+                        from google.ai.generativelanguage_v1beta.types import content as glm_content
+                        response_parts = []
+                        for tr in tool_results:
+                            response_parts.append(glm_content.Part(
+                                function_response=glm_content.FunctionResponse(
+                                    name=tr["function_call"].name,
+                                    response=tr["function_response"]
+                                )
+                            ))
+                        response = chat.send_message(response_parts)
+                    except Exception as e:
+                        print(f"   ⚠️ Error in multi-turn conversation: {e}")
+                        break
+
+            print(f"   " + "="*60)
+            if memory_stored:
+                print(f"   ✅ Memory successfully stored after {turn_count} turn(s)")
+            else:
+                print(f"   ℹ️ No memory stored after {turn_count} turn(s)")
 
             # Track analytics for this video analysis
             if self.analytics:
@@ -1162,9 +1339,18 @@ Now analyze this video and decide whether to store memory."""
             except Exception as e:
                 print(f"   ⚠️ Could not delete video file from Gemini: {e}")
 
-            # IMPORTANT: Keep local video for review (as per user request)
-            # DO NOT delete the local video file
-            print(f"   📁 Video saved for review: {video_path}")
+            # Clean up temporary video file if it was created for analysis only
+            if is_temp_file:
+                try:
+                    video_file_path = Path(video_path)
+                    if video_file_path.exists():
+                        video_file_path.unlink()
+                        print(f"   🗑️ Temporary analysis video deleted")
+                except Exception as e:
+                    print(f"   ⚠️ Could not delete temporary video: {e}")
+            else:
+                # Keep permanent videos for review
+                print(f"   📁 Video saved for review: {video_path}")
 
         except Exception as e:
             print(f"   ❌ Error analyzing video: {e}")
@@ -1189,24 +1375,40 @@ Now analyze this video and decide whether to store memory."""
             try:
                 # Get video from queue with timeout to allow checking analysis_running flag
                 try:
-                    video_path, active_context = self.analysis_queue.get(timeout=1.0)
+                    queue_item = self.analysis_queue.get(timeout=1.0)
                 except Empty:
                     continue
+
+                # Unpack queue item (video_path, active_context, is_temp)
+                if len(queue_item) == 3:
+                    video_path, active_context, is_temp = queue_item
+                else:
+                    # Backward compatibility
+                    video_path, active_context = queue_item
+                    is_temp = False
 
                 if video_path is None:  # Sentinel value to stop the worker
                     break
 
                 # Process the video
-                print(f"\n   🧠 [Background] Analyzing video: {Path(video_path).name}")
-                self._analyze_video_with_gemini(video_path, active_context)
+                print(f"\n{'='*70}")
+                print(f"🧠 [ANALYSIS WORKER] Processing video: {Path(video_path).name if video_path else 'None'}")
+                print(f"{'='*70}")
+                self._analyze_video_with_gemini(video_path, active_context, is_temp_file=is_temp)
 
                 # Mark task as done
                 self.analysis_queue.task_done()
+                print(f"✅ Video analysis complete")
+                print(f"{'='*70}\n")
 
             except Exception as e:
-                print(f"   ❌ Error in analysis worker: {e}")
+                print(f"\n❌❌❌ ERROR IN ANALYSIS WORKER ❌❌❌")
+                print(f"Error: {e}")
                 import traceback
                 traceback.print_exc()
+                print(f"{'='*70}\n")
+                # Still mark as done to prevent queue from blocking
+                self.analysis_queue.task_done()
 
         print("🛑 Video analysis worker thread stopped")
 
@@ -1396,48 +1598,22 @@ Structure your analysis clearly with sections. Start with file paths section lis
             return f"Error analyzing: {str(e)}"
     
     def _store_context(self, screenshot_path, description, active_context):
-        """Store context in database with embedding and local memory system"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        """Store context in ChromaDB local memory system"""
+        if not self.use_local_memory or not self.local_memory:
+            print(f"⚠️ ChromaDB not available, skipping context storage")
+            return
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Generate embedding for the description only (vision-based)
-        print("Generating embedding...")
-        embedding = self._generate_embedding(description)
-        embedding_blob = None
-        if embedding:
-            embedding_blob = json.dumps(embedding).encode('utf-8')
+        try:
+            # Format content for local memory (vision-based description only)
+            files_info = "\n".join([f"  - {f}" for f in active_context['files'][:10]]) if active_context['files'] else "None"
+            apps_info = ", ".join(active_context['applications'][:10]) if active_context['applications'] else "None"
 
-        # Store in local database
-        cursor.execute('''
-            INSERT INTO context_snapshots
-            (timestamp, screenshot_path, description, active_files, open_applications, embedding, created_at, screen_text)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            timestamp,
-            screenshot_path,
-            description,
-            json.dumps(active_context['files']),
-            json.dumps(active_context['applications']),
-            embedding_blob,
-            timestamp,
-            ""  # Empty screen_text since we're using vision only
-        ))
+            # Generate a unique context ID
+            context_id = f"ctx_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
 
-        context_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-
-        # Store in Local Memory System if available
-        if self.use_local_memory and self.local_memory:
-            try:
-                # Format content for local memory (vision-based description only)
-                files_info = "\n".join([f"  - {f}" for f in active_context['files'][:10]]) if active_context['files'] else "None"
-                apps_info = ", ".join(active_context['applications'][:10]) if active_context['applications'] else "None"
-
-                memory_content = f"""Timestamp: {timestamp}
-Context ID: {context_id}
+            memory_content = f"""Timestamp: {timestamp}
 
 Description (from Vision Analysis):
 {description}
@@ -1450,44 +1626,46 @@ Recently Accessed Files:
 Screenshot: {screenshot_path}
 """
 
-                # Add memory with metadata for rich retrieval
-                memory_metadata = {
-                    "timestamp": timestamp,
-                    "context_id": str(context_id),
-                    "screenshot_path": screenshot_path,
-                    "applications": json.dumps(active_context['applications'][:10]),
-                    "files": json.dumps(active_context['files'][:10])
-                }
+            # Add memory with metadata for rich retrieval
+            memory_metadata = {
+                "timestamp": timestamp,
+                "context_id": context_id,
+                "screenshot_path": screenshot_path,
+                "applications": json.dumps(active_context['applications'][:10]),
+                "files": json.dumps(active_context['files'][:10]),
+                "type": "screen_capture"
+            }
 
-                self.local_memory.add_memory(
-                    content=memory_content,
-                    metadata=memory_metadata,
-                    memory_id=f"ctx_{context_id}"
-                )
-                print(f"[{timestamp}] Context stored in local DB and local memory system for user '{self.user_id}'")
-            except Exception as e:
-                print(f"⚠️ Failed to store in local memory (stored in SQLite): {e}")
-        else:
-            print(f"[{timestamp}] Context stored with embedding (SQLite only, vision-based)")
+            self.local_memory.add_memory(
+                content=memory_content,
+                metadata=memory_metadata,
+                memory_id=context_id
+            )
+            print(f"[{timestamp}] ✓ Context stored to ChromaDB for user '{self.user_id}'")
+
+        except Exception as e:
+            print(f"❌ Failed to store context in ChromaDB: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _retrieve_relevant_contexts(self, query: str, top_k: int = 10):
         """
-        Retrieve most relevant contexts using RAG with local memory system or SQLite embeddings
-        Always includes the last N recent contexts plus semantically similar ones
+        Retrieve most relevant contexts using ChromaDB local memory system with temporal awareness
 
         Args:
             query: The user's question or current screen content
-            top_k: Total number of contexts to retrieve (including always_recent)
+            top_k: Total number of contexts to retrieve
 
         Returns:
             List of (id, timestamp, description, active_files, open_applications, screen_text, similarity_score) tuples
         """
-        # If Local Memory System is available, use it for fast temporal-aware retrieval
+        # Use ChromaDB local memory system for fast temporal-aware retrieval
         if self.use_local_memory and self.local_memory:
             return self._retrieve_from_local_memory(query, top_k)
 
-        # Fallback to local SQLite + embeddings
-        return self._retrieve_from_local_db(query, top_k)
+        # No fallback - ChromaDB is required
+        print("⚠️ ChromaDB not available, cannot retrieve contexts")
+        return []
 
     def _retrieve_from_local_memory(self, query: str, top_k: int = 10):
         """
@@ -1507,8 +1685,8 @@ Screenshot: {screenshot_path}
             memories = self.local_memory.search_memories(query=query, top_k=top_k)
 
             if not memories:
-                print("⚠️ No memories found in local storage, falling back to SQLite DB")
-                return self._retrieve_from_local_db(query, top_k)
+                print("⚠️ No memories found in ChromaDB")
+                return []
 
             # Convert LocalMemorySystem format to backend format
             results = []
@@ -1558,89 +1736,11 @@ Screenshot: {screenshot_path}
             return results
 
         except Exception as e:
-            print(f"⚠️ Error retrieving from local memory: {e}")
+            print(f"❌ Error retrieving from ChromaDB: {e}")
             import traceback
             traceback.print_exc()
-            print("Falling back to SQLite database...")
-            return self._retrieve_from_local_db(query, top_k)
-
-    def _retrieve_from_local_db(self, query: str, top_k: int = 10):
-        """
-        Retrieve contexts from local SQLite database (fallback method)
-
-        Args:
-            query: The user's question or current screen content
-            top_k: Total number of contexts to retrieve
-
-        Returns:
-            List of tuples with context information
-        """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        # Get the most recent N contexts (always included)
-        cursor.execute('''
-            SELECT id, timestamp, description, active_files, open_applications, embedding, screen_text
-            FROM context_snapshots
-            ORDER BY created_at DESC
-            LIMIT ?
-        ''', (self.always_recent,))
-
-        recent_contexts = cursor.fetchall()
-        recent_ids = {ctx[0] for ctx in recent_contexts}
-
-        # Get all contexts with embeddings for similarity search
-        cursor.execute('''
-            SELECT id, timestamp, description, active_files, open_applications, embedding, screen_text
-            FROM context_snapshots
-            WHERE embedding IS NOT NULL
-            ORDER BY created_at DESC
-        ''')
-
-        all_contexts = cursor.fetchall()
-        conn.close()
-
-        if not all_contexts:
             return []
 
-        # Generate embedding for the query
-        query_embedding = self._generate_embedding(query)
-
-        if not query_embedding:
-            print("Warning: Could not generate query embedding, using only recent contexts")
-            return [(ctx[0], ctx[1], ctx[2], ctx[3], ctx[4], ctx[6], 1.0) for ctx in recent_contexts]
-
-        # Calculate similarity scores for all contexts
-        scored_contexts = []
-        for ctx in all_contexts:
-            ctx_id, timestamp, description, active_files, open_applications, embedding_blob, screen_text = ctx
-
-            if embedding_blob:
-                try:
-                    embedding = json.loads(embedding_blob.decode('utf-8'))
-                    similarity = self._cosine_similarity(query_embedding, embedding)
-                    scored_contexts.append((ctx_id, timestamp, description, active_files, open_applications, screen_text or "", similarity))
-                except Exception as e:
-                    print(f"Error processing embedding for context {ctx_id}: {e}")
-
-        # Sort by similarity (descending)
-        scored_contexts.sort(key=lambda x: x[6], reverse=True)
-
-        # Combine: always include recent contexts, then add most similar ones
-        result = []
-
-        # Add recent contexts first (with score 1.0 to indicate they're always included)
-        for ctx in recent_contexts:
-            result.append((ctx[0], ctx[1], ctx[2], ctx[3], ctx[4], ctx[6] or "", 1.0))
-
-        # Add most similar contexts (excluding those already in recent)
-        remaining_slots = top_k - len(recent_contexts)
-        for ctx in scored_contexts:
-            if ctx[0] not in recent_ids and len(result) < top_k:
-                result.append(ctx)
-
-        return result
-    
     def _generate_autonomous_content(self):
         """Generate proactive content based on current screen activity (vision only)"""
         try:
@@ -2182,17 +2282,18 @@ Be comprehensive and extract all text and information."""
             Success or error message
         """
         try:
-            if not self.use_local_memory or not self.local_memory:
-                return json.dumps({
-                    "success": False,
-                    "error": "Local memory not available. Using SQLite storage only."
-                })
-
-            # Format content with metadata
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             tags_str = ", ".join(tags) if tags else "general"
 
-            formatted_content = f"""[AI-Stored Memory - {importance.upper()} priority]
+            # Track storage locations
+            storage_locations = []
+            memory_id = None
+
+            # Try to store in ChromaDB (LocalMemorySystem) first
+            if self.use_local_memory and self.local_memory:
+                try:
+                    # Format content with metadata
+                    formatted_content = f"""[AI-Stored Memory - {importance.upper()} priority]
 Timestamp: {timestamp}
 Summary: {summary}
 Tags: {tags_str}
@@ -2200,25 +2301,36 @@ Tags: {tags_str}
 {content}
 """
 
-            # Store to Local Memory System with metadata
-            memory_metadata = {
-                "summary": summary,
-                "importance": importance,
-                "tags": json.dumps(tags) if tags else "[]",
-                "timestamp": timestamp,
-                "type": "ai_stored"
-            }
+                    # Store to Local Memory System with metadata
+                    memory_metadata = {
+                        "summary": summary,
+                        "importance": importance,
+                        "tags": json.dumps(tags) if tags else "[]",
+                        "timestamp": timestamp,
+                        "type": "ai_stored"
+                    }
 
-            memory_id = self.local_memory.add_memory(
-                content=formatted_content,
-                metadata=memory_metadata
-            )
+                    memory_id = self.local_memory.add_memory(
+                        content=formatted_content,
+                        metadata=memory_metadata
+                    )
+                    storage_locations.append("ChromaDB")
+                    print(f"✓ Stored to ChromaDB: {memory_id}")
 
-            # Also store in local database for backup
-            self._store_context_simple(content, summary, importance, tags)
+                except Exception as chromadb_error:
+                    print(f"⚠️ Failed to store in ChromaDB: {chromadb_error}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print("⚠️ ChromaDB not available, cannot store memory")
 
-            print(f"\n💾 [AI Decision] Stored memory locally for user '{self.user_id}': {summary}")
+            # Check if we stored anywhere
+            if not storage_locations:
+                raise Exception("Failed to store memory - ChromaDB not available")
+
+            print(f"\n💾 [AI Decision] Stored memory for user '{self.user_id}': {summary}")
             print(f"   Importance: {importance} | Tags: {tags_str}")
+            print(f"   Storage: {' + '.join(storage_locations)}")
 
             # Emit progress if callback available
             self._emit_progress("MEMORY_STORED", {
@@ -2226,59 +2338,28 @@ Tags: {tags_str}
                 "importance": importance,
                 "tags": tags or [],
                 "timestamp": timestamp,
-                "user_id": self.user_id
+                "user_id": self.user_id,
+                "storage_locations": storage_locations
             })
 
             return json.dumps({
                 "success": True,
-                "message": f"Memory stored successfully in local storage: {summary}",
+                "message": f"Memory stored successfully: {summary}",
                 "timestamp": timestamp,
                 "user_id": self.user_id,
-                "memory_id": memory_id
+                "memory_id": memory_id,
+                "storage_locations": storage_locations
             })
 
         except Exception as e:
             error_msg = f"Error storing memory: {str(e)}"
+            import traceback
+            traceback.print_exc()
             print(f"❌ {error_msg}")
             return json.dumps({
                 "success": False,
                 "error": error_msg
             })
-
-    def _store_context_simple(self, content: str, summary: str, importance: str, tags: List[str] = None):
-        """Store a simple memory entry in local database (backup)"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            tags_str = json.dumps(tags) if tags else "[]"
-
-            # Generate embedding
-            embedding_content = f"{summary}\n\n{content}"
-            embedding = self._generate_embedding(embedding_content)
-            embedding_blob = json.dumps(embedding).encode('utf-8') if embedding else None
-
-            cursor.execute('''
-                INSERT INTO context_snapshots
-                (timestamp, screenshot_path, description, active_files, open_applications, embedding, created_at, screen_text, tags)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                timestamp,
-                None,  # No screenshot for AI-stored memories
-                f"[AI-Stored - {importance}] {summary}",
-                "[]",
-                "[]",
-                embedding_blob,
-                timestamp,
-                content,
-                tags_str
-            ))
-
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"Warning: Could not store to local database: {e}")
 
     def github_get_commits(self, repo_name: str, count: int = 10) -> str:
         """
@@ -3293,11 +3374,13 @@ Analyze the screen NOW and make your decision:"""
                         if not condensed_video_path or frames_kept == 0:
                             # No interesting frames - analyze full video instead
                             print(f"   ⚠️ No interesting frames detected - analyzing full video instead")
-                            print(f"   💾 Full video saved for review: {Path(full_video_path).name}")
+                            if full_video_path:
+                                print(f"   💾 Full video saved for review: {Path(full_video_path).name}")
                         else:
                             # Use condensed video for analysis
                             print(f"   🧠 Using condensed video for Gemini analysis...")
-                            print(f"   💾 Full video saved for review: {Path(full_video_path).name}")
+                            if full_video_path:
+                                print(f"   💾 Full video saved for review: {Path(full_video_path).name}")
 
                         # Always queue video for analysis (condensed if available, full otherwise)
                         print(f"   🧠 Queuing video for Gemini analysis...")
@@ -3307,8 +3390,11 @@ Analyze the screen NOW and make your decision:"""
                             if queue_size > 0:
                                 print(f"   📊 Analysis queue: {queue_size} video(s) waiting")
 
+                            # Check if this is a temporary video (for cleanup after analysis)
+                            is_temp = video_result.get('is_temp', False)
+
                             # Add video to queue (condensed if available, full video as fallback)
-                            self.analysis_queue.put((video_to_analyze, active_context), timeout=2.0)
+                            self.analysis_queue.put((video_to_analyze, active_context, is_temp), timeout=2.0)
                             print(f"   ✅ Video queued for analysis (continuing recording...)")
 
                             # Track analysis in analytics with cost savings
@@ -3324,7 +3410,8 @@ Analyze the screen NOW and make your decision:"""
                             print(f"   ⚠️ Failed to queue video for analysis: {e}")
                             # If queue is full or error, analyze synchronously as fallback
                             print(f"   🧠 Falling back to synchronous analysis...")
-                            self._analyze_video_with_gemini(video_to_analyze, active_context)
+                            is_temp = video_result.get('is_temp', False)
+                            self._analyze_video_with_gemini(video_to_analyze, active_context, is_temp_file=is_temp)
 
                         # Autonomous content generation (if enabled)
                         if self.autonomous_mode:
@@ -3464,17 +3551,38 @@ Analyze the screen NOW and make your decision:"""
         # Get active context (files, apps, etc.)
         active_context = self._get_active_context()
 
-        # Get recent stored context
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT timestamp, description, screen_text, active_files, open_applications
-            FROM context_snapshots
-            ORDER BY timestamp DESC
-            LIMIT 5
-        ''')
-        recent_contexts = cursor.fetchall()
-        conn.close()
+        # Get recent stored context from ChromaDB
+        recent_contexts = []
+        if self.use_local_memory and self.local_memory:
+            try:
+                recent_memories = self.local_memory.get_recent_memories(limit=5)
+                for mem in recent_memories:
+                    metadata = mem.get('metadata', {})
+                    content = mem.get('content', '')
+                    # Parse content to extract description
+                    description = ""
+                    if "Description (from Vision Analysis):" in content:
+                        lines = content.split('\n')
+                        for i, line in enumerate(lines):
+                            if line.startswith("Description (from Vision Analysis):"):
+                                desc_lines = []
+                                for j in range(i+1, len(lines)):
+                                    if lines[j].startswith("Active Applications:"):
+                                        break
+                                    if lines[j].strip():
+                                        desc_lines.append(lines[j])
+                                description = "\n".join(desc_lines).strip()
+                                break
+
+                    recent_contexts.append((
+                        metadata.get('timestamp', ''),
+                        description,
+                        '',  # screen_text (not used)
+                        metadata.get('files', '[]'),
+                        metadata.get('applications', '[]')
+                    ))
+            except Exception as e:
+                print(f"⚠️ Could not retrieve recent contexts from ChromaDB: {e}")
 
         # Build context string with file information
         context_parts = []
@@ -3665,29 +3773,17 @@ Provide clear, concise, step-by-step guidance. Use your tools to access real inf
 
     def _query_with_gemini(self, question):
         """Query stored context using RAG-based retrieval with Gemini (fallback)"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        # Check if we have any contexts in local DB
-        cursor.execute('SELECT COUNT(*) FROM context_snapshots')
-        count = cursor.fetchone()[0]
-        conn.close()
-
-        # Also check local memory if available
-        local_memory_count = 0
-        if count == 0 and self.use_local_memory and self.local_memory:
+        # Check if ChromaDB is available and has contexts
+        count = 0
+        if self.use_local_memory and self.local_memory:
             try:
                 stats = self.local_memory.get_stats()
-                local_memory_count = stats.get('total_memories', 0)
+                count = stats.get('total_memories', 0)
             except Exception as e:
-                print(f"⚠️ Error checking local memories: {e}")
+                print(f"⚠️ Error checking ChromaDB: {e}")
 
-        if count == 0 and local_memory_count == 0:
-            return "No context stored yet. Start capturing first!"
-
-        # Use local memory count if SQLite DB is empty
-        if count == 0 and local_memory_count > 0:
-            count = local_memory_count
+        if count == 0:
+            return "No memories stored yet in ChromaDB. Start capturing first!"
 
         print(f"\n{'='*60}")
         print("🤖 PROCESSING YOUR QUESTION")
@@ -4044,29 +4140,17 @@ User Question: {question}"""
 
     def _query_with_claude(self, question):
         """Query stored context using RAG-based retrieval with Claude 4.5 Sonnet"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        # Check if we have any contexts in local DB
-        cursor.execute('SELECT COUNT(*) FROM context_snapshots')
-        count = cursor.fetchone()[0]
-        conn.close()
-
-        # Also check local memory if available
-        local_memory_count = 0
-        if count == 0 and self.use_local_memory and self.local_memory:
+        # Check if ChromaDB is available and has contexts
+        count = 0
+        if self.use_local_memory and self.local_memory:
             try:
                 stats = self.local_memory.get_stats()
-                local_memory_count = stats.get('total_memories', 0)
+                count = stats.get('total_memories', 0)
             except Exception as e:
-                print(f"⚠️ Error checking local memories: {e}")
+                print(f"⚠️ Error checking ChromaDB: {e}")
 
-        if count == 0 and local_memory_count == 0:
-            return "No context stored yet. Start capturing first!"
-
-        # Use local memory count if SQLite DB is empty
-        if count == 0 and local_memory_count > 0:
-            count = local_memory_count
+        if count == 0:
+            return "No memories stored yet in ChromaDB. Start capturing first!"
 
         print(f"\n{'='*60}")
         print("🤖 PROCESSING YOUR QUESTION WITH CLAUDE 4.5 SONNET")
@@ -4775,69 +4859,37 @@ If the user asks about:
         ]
 
     def list_recent(self, limit=10):
-        """List recent captures"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT id, timestamp, description 
-            FROM context_snapshots 
-            ORDER BY created_at DESC 
-            LIMIT ?
-        ''', (limit,))
-        
-        results = cursor.fetchall()
-        conn.close()
-        
-        if not results:
-            print("No captures yet.")
+        """List recent captures from ChromaDB"""
+        if not self.use_local_memory or not self.local_memory:
+            print("ChromaDB not available.")
             return
-        
-        for id, timestamp, desc in results:
-            print(f"\n[ID: {id}] {timestamp}")
-            print(desc)
-            print("-" * 80)
-    
+
+        try:
+            memories = self.local_memory.get_recent_memories(limit=limit)
+
+            if not memories:
+                print("No captures yet.")
+                return
+
+            for mem in memories:
+                metadata = mem.get('metadata', {})
+                content = mem.get('content', '')
+                timestamp = metadata.get('timestamp', 'Unknown')
+                context_id = metadata.get('context_id', 'Unknown')
+
+                # Extract description from content
+                description = content[:200] + "..." if len(content) > 200 else content
+
+                print(f"\n[ID: {context_id}] {timestamp}")
+                print(description)
+                print("-" * 80)
+        except Exception as e:
+            print(f"Error listing recent captures: {e}")
+
     def reindex_embeddings(self):
-        """Generate embeddings for all contexts that don't have them"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Get contexts without embeddings
-        cursor.execute('''
-            SELECT id, description, screen_text
-            FROM context_snapshots 
-            WHERE embedding IS NULL
-        ''')
-        
-        contexts_to_index = cursor.fetchall()
-        
-        if not contexts_to_index:
-            print("All contexts already have embeddings!")
-            conn.close()
-            return
-        
-        print(f"Generating embeddings for {len(contexts_to_index)} contexts...")
-        
-        for idx, (ctx_id, description, screen_text) in enumerate(contexts_to_index, 1):
-            print(f"Processing {idx}/{len(contexts_to_index)}...", end='\r')
-            
-            embedding_content = description + "\n\nScreen Text:\n" + (screen_text or "")
-            embedding = self._generate_embedding(embedding_content)
-            if embedding:
-                embedding_blob = json.dumps(embedding).encode('utf-8')
-                cursor.execute('''
-                    UPDATE context_snapshots 
-                    SET embedding = ?
-                    WHERE id = ?
-                ''', (embedding_blob, ctx_id))
-                conn.commit()
-            
-            # Small delay to avoid rate limiting
-            time.sleep(0.5)
-        
-        conn.close()
-        print(f"\n✅ Successfully generated embeddings for {len(contexts_to_index)} contexts!")
+        """ChromaDB handles embeddings automatically - this method is deprecated"""
+        print("Embeddings are automatically generated by ChromaDB when memories are stored.")
+        print("No reindexing needed!")
 
 
 def main():

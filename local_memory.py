@@ -60,7 +60,7 @@ class LocalMemorySystem:
         self.temporal_decay_days = temporal_decay_days
 
         # Configure Google AI for embeddings
-        genai.configure(api_key=api_key)
+        genai.configure(api_key='AIzaSyBY6rQz-TCRenrrdXv2uKbE4GTbgHQbLuk')
 
         # Initialize ChromaDB with persistent storage
         self.db_path.mkdir(exist_ok=True)
