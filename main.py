@@ -87,9 +87,14 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QSize, QPoint, pyqtSignal, QObject, QPropertyAnimation, QEasingCurve, QMimeData
 from PyQt6.QtGui import QFont, QAction, QColor
 
-from pynput import keyboard
+try:
+    from pynput import keyboard
+    PYNPUT_AVAILABLE = True
+except ImportError:
+    PYNPUT_AVAILABLE = False
+    print("Warning: pynput not available, hotkey disabled")
 
-HOTKEY_COMBO = "<ctrl>+<alt>+`"   # you can change this to whatever you want
+HOTKEY_COMBO = "<ctrl>+`"   # Changed from Ctrl+Alt+` to Ctrl+`
 
 _hotkey_queue = Queue()
 
@@ -2326,7 +2331,7 @@ class OverlayWindow(QWidget):
         import time
         ts = time.strftime("%H:%M:%S")
         question_html = (
-            f"<div style='margin: 16px 0;'>"
+            f"<div style='margin: 16px 0; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.1);'>"
             f"<div style='color: #9CA3AF; font-size: 10px; font-weight: 600; text-transform: uppercase; "
             f"letter-spacing: 1px; margin-bottom: 8px;'>YOU [{ts}]</div>"
             f"<div style='color: #E5E7EB; font-size: 13px; line-height: 1.6;'>{q}</div>"
@@ -3316,7 +3321,7 @@ class OverlayWindow(QWidget):
 
         # Create formatted HTML for display
         html_display = (
-            f"<div style='margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.04);'>"
+            f"<div style='margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.1);'>"
             f"<span style='color: #71717A; font-size: 10px; font-weight: 500;'>[{ts}]</span>"
             f"<div style='color: #FAFAFA; line-height: 1.6; margin-top: 8px;'>{html_content}</div>"
             f"</div>"
@@ -3773,12 +3778,13 @@ def main():
     w.move(geo.x() + geo.width() - w.width() - 40, geo.y() + (geo.height() - w.height()) // 2)
     w.show()
 
-    # TEMPORARILY DISABLED: Global hotkey listener causes access violations on Windows
-    # This is a known issue with pynput library when used alongside Qt
-    # TODO: Replace with a more stable hotkey library or run in separate process
-    # hk_thread = threading.Thread(target=hotkey_listener, daemon=True, name="HotkeyThread")
-    # hk_thread.start()
-    print("ℹ️ Global hotkey listener disabled (known crash issue with pynput on Windows)")
+    # Start global hotkey listener with crash protection
+    if PYNPUT_AVAILABLE:
+        hk_thread = threading.Thread(target=hotkey_listener, daemon=True, name="HotkeyThread")
+        hk_thread.start()
+        print(f"✓ Global hotkey enabled: {HOTKEY_COMBO} to toggle overlay")
+    else:
+        print("⚠️ Global hotkey disabled (pynput not available)")
 
     # Poll the queue every few ms to toggle visibility
     def poll_hotkey_queue():
