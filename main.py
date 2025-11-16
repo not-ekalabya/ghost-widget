@@ -377,6 +377,14 @@ class CompanionRunner(threading.Thread):
                 memory_id = payload
                 success = self._delete_memory(memory_id)
                 _from_companion_q.put(("DELETE_SUCCESS", success))
+            elif cmd == "CLEAR_ALL_MEMORIES":
+                # Clear all memories
+                success = self._clear_all_memories()
+                _from_companion_q.put(("CLEAR_SUCCESS", success))
+            elif cmd == "GET_MEMORY_STATS":
+                # Get memory statistics
+                stats = self._get_memory_stats()
+                _from_companion_q.put(("MEMORY_STATS", stats))
             elif cmd == "UPDATE_CONFIG":
                 new_conf = payload or {}
                 self._update_config(new_conf)
@@ -567,6 +575,57 @@ class CompanionRunner(threading.Thread):
             traceback.print_exc()
             return False
 
+    def _clear_all_memories(self):
+        """Clear all memories"""
+        if not self.companion:
+            return False
+
+        try:
+            # Check if companion has clear_memories method
+            if hasattr(self.companion, 'clear_memories'):
+                # Call the clear_memories tool with confirmation
+                result_json = self.companion.clear_memories(confirm=True)
+                result = json.loads(result_json)
+                success = result.get('success', False)
+                if success:
+                    print(f"✅ All memories cleared")
+                else:
+                    print(f"⚠️ Failed to clear memories: {result.get('error', 'Unknown error')}")
+                return success
+            else:
+                print("⚠️ Clear memories function not available")
+                return False
+        except Exception as e:
+            print(f"Error clearing memories: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _get_memory_stats(self):
+        """Get memory statistics"""
+        if not self.companion:
+            return {}
+
+        try:
+            # Check if companion has get_memory_stats method
+            if hasattr(self.companion, 'get_memory_stats'):
+                # Call the get_memory_stats tool
+                result_json = self.companion.get_memory_stats()
+                result = json.loads(result_json)
+                if result.get('success'):
+                    return result.get('stats', {})
+                else:
+                    print(f"⚠️ Failed to get stats: {result.get('error', 'Unknown error')}")
+                    return {}
+            else:
+                print("⚠️ Memory stats function not available")
+                return {}
+        except Exception as e:
+            print(f"Error getting memory stats: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
+
 
 # ---------- Qt UI components ----------
 class Signals(QObject):
@@ -625,6 +684,11 @@ class OverlayWindow(QWidget):
             "started_at": None,
             "last_document_id": None
         }
+
+        # Automatic guidance mode
+        self.guidance_timer = None
+        self.guidance_session_context = []  # Stores all guidance Q&A for session context
+        self.last_guidance_question = None  # Track the last guidance question to match with response
 
         self.init_ui()
         self.start_polling_companion_queue()
@@ -1187,13 +1251,14 @@ class OverlayWindow(QWidget):
         guidance_h = QHBoxLayout()
         guidance_h.setSpacing(12)
 
-        self.guidance_mode_checkbox = QCheckBox("Guidance Mode")
+        self.guidance_mode_checkbox = QCheckBox("Auto-Guidance Mode")
         self.guidance_mode_checkbox.setObjectName("modernCheckbox")
         self.guidance_mode_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.guidance_mode_checkbox.setToolTip("Enable real-time screen capture and instant AI guidance")
+        self.guidance_mode_checkbox.setToolTip("Enable automatic AI guidance every 5 seconds with full session context")
+        self.guidance_mode_checkbox.stateChanged.connect(self.on_guidance_mode_toggled)
         guidance_h.addWidget(self.guidance_mode_checkbox)
 
-        guidance_label = QLabel("(Live screen capture + instant responses)")
+        guidance_label = QLabel("(Automatic guidance every 5s with full context)")
         guidance_label.setObjectName("subtleLabel")
         guidance_label.setStyleSheet("color: #9CA3AF; font-size: 11px;")
         guidance_h.addWidget(guidance_label)
@@ -1634,6 +1699,30 @@ class OverlayWindow(QWidget):
         scroll_area.setWidget(self.memories_container)
         memories_layout.addWidget(scroll_area, 1)
 
+        # Bottom buttons section
+        bottom_buttons = QHBoxLayout()
+        bottom_buttons.setSpacing(8)
+
+        # Clear all memories button
+        clear_all_btn = QPushButton("🗑️ Clear All Memories")
+        clear_all_btn.setObjectName("dangerButton")
+        clear_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_all_btn.clicked.connect(self.on_clear_all_memories)
+        clear_all_btn.setFixedHeight(36)
+        clear_all_btn.setToolTip("Delete all stored memories (cannot be undone)")
+        bottom_buttons.addWidget(clear_all_btn)
+
+        # Get memory stats button
+        stats_btn = QPushButton("📊 View Stats")
+        stats_btn.setObjectName("secondaryButton")
+        stats_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        stats_btn.clicked.connect(self.on_view_memory_stats)
+        stats_btn.setFixedHeight(36)
+        stats_btn.setToolTip("View memory statistics")
+        bottom_buttons.addWidget(stats_btn)
+
+        memories_layout.addLayout(bottom_buttons)
+
         # Status label for memory operations
         self.memory_status_lbl = QLabel("")
         self.memory_status_lbl.setObjectName("fieldLabel")
@@ -1939,6 +2028,44 @@ class OverlayWindow(QWidget):
 
             #accentButton:pressed {
                 background: #047857;
+            }
+
+            /* Danger button */
+            #dangerButton {
+                background: #DC2626;
+                color: #FFFFFF;
+                border: none;
+                border-radius: 8px;
+                font-weight: 600;
+                font-size: 12px;
+                letter-spacing: -0.2px;
+            }
+
+            #dangerButton:hover {
+                background: #B91C1C;
+            }
+
+            #dangerButton:pressed {
+                background: #991B1B;
+            }
+
+            /* Icon button */
+            #iconButton {
+                background: rgba(255, 255, 255, 0.06);
+                color: #FAFAFA;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                font-weight: 500;
+                font-size: 14px;
+            }
+
+            #iconButton:hover {
+                background: rgba(255, 255, 255, 0.10);
+                border: 1px solid rgba(255, 255, 255, 0.14);
+            }
+
+            #iconButton:pressed {
+                background: rgba(255, 255, 255, 0.04);
             }
 
             /* Text button */
@@ -2327,6 +2454,9 @@ class OverlayWindow(QWidget):
         # Store the original question for later saving with the response
         self.current_question = q
 
+        # Clear last_guidance_question to ensure this manual question doesn't get treated as auto-guidance
+        self.last_guidance_question = None
+
         # Display the user's question in the chat area
         import time
         ts = time.strftime("%H:%M:%S")
@@ -2344,9 +2474,8 @@ class OverlayWindow(QWidget):
         cursor.movePosition(cursor.MoveOperation.End)
         self.response_area.setTextCursor(cursor)
 
-        # Include guidance mode status with the question
-        guidance_mode = self.guidance_mode_checkbox.isChecked()
-        _to_companion_q.put(("ASK", {"question": enhanced_question, "guidance_mode": guidance_mode}))
+        # Manual questions don't use guidance mode - they use the full model
+        _to_companion_q.put(("ASK", {"question": enhanced_question, "guidance_mode": False}))
         # optionally clear input
         self.ask_edit.clear()
 
@@ -2355,6 +2484,81 @@ class OverlayWindow(QWidget):
         if self.conversation_context:
             self.signals.log.emit("<span style='color: #60A5FA;'>💬 Continuing previous conversation...</span>")
             self.conversation_context = None
+
+    def on_guidance_mode_toggled(self, state):
+        """Handle guidance mode checkbox toggle"""
+        if state == Qt.CheckState.Checked.value:
+            self.start_automatic_guidance()
+        else:
+            self.stop_automatic_guidance()
+
+    def start_automatic_guidance(self):
+        """Start automatic guidance timer"""
+        # Check authentication before starting
+        if not (self.firebase_auth and self.firebase_auth.is_authenticated()):
+            self.signals.log.emit("<span style='color: #EF4444;'>⚠️ Please sign in to use automatic guidance</span>")
+            self.guidance_mode_checkbox.setChecked(False)
+            return
+
+        # Clear previous session context
+        self.guidance_session_context = []
+
+        # Create and start timer
+        if self.guidance_timer is None:
+            self.guidance_timer = QTimer()
+            self.guidance_timer.timeout.connect(self.trigger_automatic_guidance)
+
+        self.guidance_timer.start(5000)  # 5 seconds
+        self.signals.log.emit("<span style='color: #10B981;'>✅ Automatic guidance started (every 5 seconds)</span>")
+
+        # Trigger first guidance immediately
+        self.trigger_automatic_guidance()
+
+    def stop_automatic_guidance(self):
+        """Stop automatic guidance timer"""
+        if self.guidance_timer and self.guidance_timer.isActive():
+            self.guidance_timer.stop()
+            self.signals.log.emit("<span style='color: #9CA3AF;'>⏸️ Automatic guidance stopped</span>")
+
+    def trigger_automatic_guidance(self):
+        """Trigger automatic guidance with full session context"""
+        # Build context from previous guidance interactions
+        context_str = ""
+        if self.guidance_session_context:
+            context_str = "\n\n=== PREVIOUS GUIDANCE SESSION CONTEXT ===\n"
+            for i, interaction in enumerate(self.guidance_session_context, 1):
+                context_str += f"\n[Guidance #{i} at {interaction['timestamp']}]\n"
+                context_str += f"Question: {interaction['question']}\n"
+                context_str += f"Response: {interaction['response'][:500]}...\n"  # Truncate long responses
+            context_str += "\n=== END OF PREVIOUS CONTEXT ===\n\n"
+
+        # Create automatic guidance prompt with accumulated context
+        guidance_prompt = f"""{context_str}Provide automatic guidance based on what I'm currently doing. Analyze my screen, recent activity, and provide helpful insights, suggestions, or answer questions about what you see. Be proactive and helpful."""
+
+        # Store timestamp for this guidance request
+        import time
+        current_timestamp = time.strftime("%H:%M:%S")
+
+        # Display that automatic guidance is being triggered
+        guidance_trigger_html = (
+            f"<div style='margin: 16px 0; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.1);'>"
+            f"<div style='color: #60A5FA; font-size: 10px; font-weight: 600; text-transform: uppercase; "
+            f"letter-spacing: 1px; margin-bottom: 8px;'>AUTO-GUIDANCE [{current_timestamp}]</div>"
+            f"<div style='color: #9CA3AF; font-size: 12px; line-height: 1.6; font-style: italic;'>Analyzing current activity...</div>"
+            f"</div>"
+        )
+        self.response_area.append(guidance_trigger_html)
+
+        # Auto-scroll
+        cursor = self.response_area.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.response_area.setTextCursor(cursor)
+
+        # Store the question for matching with response
+        self.last_guidance_question = guidance_prompt
+
+        # Send to companion with guidance mode enabled
+        _to_companion_q.put(("ASK", {"question": guidance_prompt, "guidance_mode": True}))
 
     # === UPDATE LOGGING METHODS ===
     def _log_update_event(self, level, message):
@@ -3178,6 +3382,28 @@ class OverlayWindow(QWidget):
             self.memory_status_lbl.setText("No memory selected")
             self.memory_status_lbl.setStyleSheet("color: #EF4444; font-size: 9px; margin-top: 4px;")
 
+    def on_clear_all_memories(self):
+        """Clear all memories with confirmation dialog"""
+        # Show confirmation dialog
+        reply = QMessageBox.question(
+            self,
+            'Clear All Memories',
+            'Are you sure you want to delete ALL memories?\n\nThis action cannot be undone!',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.memory_status_lbl.setText("Clearing all memories...")
+            self.memory_status_lbl.setStyleSheet("color: #EF4444; font-size: 9px; margin-top: 4px;")
+            _to_companion_q.put(("CLEAR_ALL_MEMORIES", None))
+
+    def on_view_memory_stats(self):
+        """View memory statistics"""
+        self.memory_status_lbl.setText("Loading stats...")
+        self.memory_status_lbl.setStyleSheet("color: #60A5FA; font-size: 9px; margin-top: 4px;")
+        _to_companion_q.put(("GET_MEMORY_STATS", None))
+
     def update_memories_display(self, memories):
         """Update the memories display with card-based layout"""
         # Clear existing cards
@@ -3460,8 +3686,20 @@ class OverlayWindow(QWidget):
                     response_text = str(payload)
                     self.signals.response.emit(response_text)
 
-                # Save chat to Firestore
-                self._save_chat_to_firestore(response_text)
+                # If this is an automatic guidance response, store it in session context
+                if self.last_guidance_question is not None:
+                    import time
+                    self.guidance_session_context.append({
+                        "timestamp": time.strftime("%H:%M:%S"),
+                        "question": self.last_guidance_question,
+                        "response": response_text
+                    })
+                    # Clear the last guidance question
+                    self.last_guidance_question = None
+                    # Don't save automatic guidance to Firestore
+                else:
+                    # Save chat to Firestore (only for manual questions)
+                    self._save_chat_to_firestore(response_text)
             elif typ == "ERROR":
                 self.signals.log.emit("<span style='color: #EF4444;'>[ERROR]</span> " + str(payload))
             elif typ == "CONFIG_UPDATED":
@@ -3554,7 +3792,46 @@ class OverlayWindow(QWidget):
                 # Handle delete success
                 success = payload
                 if success:
-                    self.memory_status_lbl.setText("Deleted")
+                    self.memory_status_lbl.setText("Memory deleted successfully")
+                    self.memory_status_lbl.setStyleSheet("color: #10B981; font-size: 9px; margin-top: 4px;")
+                    # Refresh the memories list
+                    self.on_refresh_memories()
+                else:
+                    self.memory_status_lbl.setText("Delete failed")
+                    self.memory_status_lbl.setStyleSheet("color: #EF4444; font-size: 9px; margin-top: 4px;")
+            elif typ == "CLEAR_SUCCESS":
+                # Handle clear all memories success
+                success = payload
+                if success:
+                    self.memory_status_lbl.setText("All memories cleared successfully")
+                    self.memory_status_lbl.setStyleSheet("color: #10B981; font-size: 9px; margin-top: 4px;")
+                    # Refresh to show empty state
+                    self.on_refresh_memories()
+                else:
+                    self.memory_status_lbl.setText("Failed to clear memories")
+                    self.memory_status_lbl.setStyleSheet("color: #EF4444; font-size: 9px; margin-top: 4px;")
+            elif typ == "MEMORY_STATS":
+                # Handle memory stats
+                stats = payload
+                if stats:
+                    total = stats.get('total_memories', 0)
+                    storage_type = stats.get('storage_type', 'Unknown')
+                    storage_path = stats.get('storage_path', 'Unknown')
+                    decay_days = stats.get('temporal_decay_days', 30)
+
+                    stats_message = (
+                        f"Total Memories: {total}\n"
+                        f"Storage: {storage_type}\n"
+                        f"Path: {storage_path}\n"
+                        f"Temporal Decay: {decay_days} days"
+                    )
+
+                    QMessageBox.information(self, "Memory Statistics", stats_message)
+                    self.memory_status_lbl.setText(f"{total} memories")
+                    self.memory_status_lbl.setStyleSheet("color: #71717A; font-size: 9px; margin-top: 4px;")
+                else:
+                    self.memory_status_lbl.setText("Failed to get stats")
+                    self.memory_status_lbl.setStyleSheet("color: #EF4444; font-size: 9px; margin-top: 4px;")
             elif typ == "UPDATE_AVAILABLE":
                 # Handle update available notification
                 update_info = payload

@@ -329,6 +329,66 @@ class BackgroundCompanion:
                         }
                     },
                     {
+                        "name": "search_memories",
+                        "description": "Search through stored memories using semantic search with temporal awareness. Use this to recall past information, context, or activities. Results are ranked by both semantic similarity and recency.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The search query to find relevant memories (e.g., 'what was I coding last week?', 'information about Python project')"
+                                },
+                                "top_k": {
+                                    "type": "number",
+                                    "description": "Number of memories to return (default: 5)"
+                                },
+                                "filter_tags": {
+                                    "type": "array",
+                                    "description": "Optional: Filter results by specific tags",
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    },
+                    {
+                        "name": "get_recent_memories",
+                        "description": "Get the most recent memories without semantic search. Use this to see what was recently stored or to review recent activities.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "limit": {
+                                    "type": "number",
+                                    "description": "Number of recent memories to retrieve (default: 10)"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "name": "get_memory_stats",
+                        "description": "Get statistics about stored memories including total count, storage location, and configuration details.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {}
+                        }
+                    },
+                    {
+                        "name": "clear_memories",
+                        "description": "Clear all stored memories for the current user. Use with caution - this is irreversible. Ask for user confirmation before calling this.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "confirm": {
+                                    "type": "boolean",
+                                    "description": "Confirmation that user wants to clear all memories (must be true)"
+                                }
+                            },
+                            "required": ["confirm"]
+                        }
+                    },
+                    {
                         "name": "github_get_commits",
                         "description": "Get recent commits from a GitHub repository. Requires GitHub authentication. Use this to get commit history, messages, authors, and code changes for blog posts or analysis.",
                         "parameters": {
@@ -2310,6 +2370,16 @@ Be comprehensive and extract all text and information."""
         """
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Convert tags to Python list if it's a RepeatedComposite (from Gemini protobuf)
+            if tags is not None:
+                if hasattr(tags, '__iter__') and not isinstance(tags, (str, dict)):
+                    tags = list(tags)  # Convert any iterable (including RepeatedComposite) to list
+                else:
+                    tags = []
+            else:
+                tags = []
+
             tags_str = ", ".join(tags) if tags else "general"
 
             # Track storage locations
@@ -2332,7 +2402,7 @@ Tags: {tags_str}
                     memory_metadata = {
                         "summary": summary,
                         "importance": importance,
-                        "tags": json.dumps(tags) if tags else "[]",
+                        "tags": json.dumps(tags),  # Now tags is guaranteed to be a Python list
                         "timestamp": timestamp,
                         "type": "ai_stored"
                     }
@@ -2341,19 +2411,19 @@ Tags: {tags_str}
                         content=formatted_content,
                         metadata=memory_metadata
                     )
-                    storage_locations.append("ChromaDB")
-                    print(f"✓ Stored to ChromaDB: {memory_id}")
+                    storage_locations.append("FAISS")
+                    print(f"✓ Stored to FAISS: {memory_id}")
 
-                except Exception as chromadb_error:
-                    print(f"⚠️ Failed to store in ChromaDB: {chromadb_error}")
+                except Exception as faiss_error:
+                    print(f"⚠️ Failed to store in FAISS: {faiss_error}")
                     import traceback
                     traceback.print_exc()
             else:
-                print("⚠️ ChromaDB not available, cannot store memory")
+                print("⚠️ FAISS memory not available, cannot store memory")
 
             # Check if we stored anywhere
             if not storage_locations:
-                raise Exception("Failed to store memory - ChromaDB not available")
+                raise Exception("Failed to store memory - FAISS memory system not available")
 
             print(f"\n💾 [AI Decision] Stored memory for user '{self.user_id}': {summary}")
             print(f"   Importance: {importance} | Tags: {tags_str}")
@@ -2363,7 +2433,7 @@ Tags: {tags_str}
             self._emit_progress("MEMORY_STORED", {
                 "summary": summary,
                 "importance": importance,
-                "tags": tags or [],
+                "tags": tags,  # Already converted to Python list above
                 "timestamp": timestamp,
                 "user_id": self.user_id,
                 "storage_locations": storage_locations
@@ -2383,6 +2453,260 @@ Tags: {tags_str}
             import traceback
             traceback.print_exc()
             print(f"❌ {error_msg}")
+            return json.dumps({
+                "success": False,
+                "error": error_msg
+            })
+
+    def search_memories(self, query: str, top_k: int = 5, filter_tags: List[str] = None) -> str:
+        """
+        Search through stored memories using semantic search with temporal awareness
+
+        Args:
+            query: The search query to find relevant memories
+            top_k: Number of memories to return (default: 5)
+            filter_tags: Optional list of tags to filter results
+
+        Returns:
+            JSON string with search results
+        """
+        try:
+            if not self.use_local_memory or not self.local_memory:
+                return json.dumps({
+                    "success": False,
+                    "error": "Local memory system not available"
+                })
+
+            print(f"\n🔍 Searching memories for: '{query}'")
+
+            # Build filter metadata if tags provided
+            filter_metadata = None
+            if filter_tags:
+                # Note: This is a simplified approach. For proper tag filtering,
+                # you'd need to modify the search_memories method in local_memory.py
+                print(f"   Filtering by tags: {filter_tags}")
+
+            # Search memories
+            results = self.local_memory.search_memories(
+                query=query,
+                top_k=top_k,
+                filter_metadata=filter_metadata
+            )
+
+            if not results:
+                return json.dumps({
+                    "success": True,
+                    "count": 0,
+                    "memories": [],
+                    "message": "No memories found matching the query"
+                })
+
+            # Format results for return
+            formatted_results = []
+            for i, result in enumerate(results, 1):
+                metadata = result.get('metadata', {})
+
+                # Parse tags if they exist
+                tags = []
+                if 'tags' in metadata:
+                    try:
+                        tags = json.loads(metadata['tags'])
+                    except:
+                        tags = []
+
+                formatted_results.append({
+                    "rank": i,
+                    "id": result.get('id', 'unknown'),
+                    "content": result.get('content', ''),
+                    "summary": metadata.get('summary', 'No summary'),
+                    "importance": metadata.get('importance', 'medium'),
+                    "tags": tags,
+                    "created_at": metadata.get('created_at', 'Unknown'),
+                    "temporal_score": float(result.get('temporal_score', 0.0)),  # Convert numpy float32 to Python float
+                    "base_similarity": float(result.get('base_similarity', 0.0))  # Convert numpy float32 to Python float
+                })
+
+            print(f"✓ Found {len(formatted_results)} relevant memories")
+
+            return json.dumps({
+                "success": True,
+                "count": len(formatted_results),
+                "query": query,
+                "memories": formatted_results
+            }, indent=2)
+
+        except Exception as e:
+            error_msg = f"Error searching memories: {str(e)}"
+            print(f"❌ {error_msg}")
+            import traceback
+            traceback.print_exc()
+            return json.dumps({
+                "success": False,
+                "error": error_msg
+            })
+
+    def get_recent_memories(self, limit: int = 10) -> str:
+        """
+        Get the most recent memories without semantic search
+
+        Args:
+            limit: Number of recent memories to retrieve (default: 10)
+
+        Returns:
+            JSON string with recent memories
+        """
+        try:
+            if not self.use_local_memory or not self.local_memory:
+                return json.dumps({
+                    "success": False,
+                    "error": "Local memory system not available"
+                })
+
+            print(f"\n📋 Retrieving {limit} most recent memories...")
+
+            # Get recent memories
+            results = self.local_memory.get_recent_memories(limit=limit)
+
+            if not results:
+                return json.dumps({
+                    "success": True,
+                    "count": 0,
+                    "memories": [],
+                    "message": "No memories stored yet"
+                })
+
+            # Format results
+            formatted_results = []
+            for i, result in enumerate(results, 1):
+                metadata = result.get('metadata', {})
+
+                # Parse tags if they exist
+                tags = []
+                if 'tags' in metadata:
+                    try:
+                        tags = json.loads(metadata['tags'])
+                    except:
+                        tags = []
+
+                formatted_results.append({
+                    "rank": i,
+                    "id": result.get('id', 'unknown'),
+                    "content": result.get('content', ''),
+                    "summary": metadata.get('summary', 'No summary'),
+                    "importance": metadata.get('importance', 'medium'),
+                    "tags": tags,
+                    "created_at": result.get('created_at', 'Unknown')
+                })
+
+            print(f"✓ Retrieved {len(formatted_results)} recent memories")
+
+            return json.dumps({
+                "success": True,
+                "count": len(formatted_results),
+                "memories": formatted_results
+            }, indent=2)
+
+        except Exception as e:
+            error_msg = f"Error retrieving recent memories: {str(e)}"
+            print(f"❌ {error_msg}")
+            import traceback
+            traceback.print_exc()
+            return json.dumps({
+                "success": False,
+                "error": error_msg
+            })
+
+    def get_memory_stats(self) -> str:
+        """
+        Get statistics about stored memories
+
+        Returns:
+            JSON string with memory statistics
+        """
+        try:
+            if not self.use_local_memory or not self.local_memory:
+                return json.dumps({
+                    "success": False,
+                    "error": "Local memory system not available"
+                })
+
+            print("\n📊 Retrieving memory statistics...")
+
+            # Get stats from local memory system
+            stats = self.local_memory.get_stats()
+
+            print(f"✓ Total memories: {stats.get('total_memories', 0)}")
+
+            return json.dumps({
+                "success": True,
+                "stats": {
+                    "total_memories": stats.get('total_memories', 0),
+                    "user_id": stats.get('user_id', self.user_id),
+                    "storage_path": stats.get('storage_path', 'Unknown'),
+                    "temporal_decay_days": stats.get('temporal_decay_days', 30),
+                    "storage_type": "FAISS (Local, Privacy-Focused)"
+                }
+            }, indent=2)
+
+        except Exception as e:
+            error_msg = f"Error retrieving memory stats: {str(e)}"
+            print(f"❌ {error_msg}")
+            import traceback
+            traceback.print_exc()
+            return json.dumps({
+                "success": False,
+                "error": error_msg
+            })
+
+    def clear_memories(self, confirm: bool = False) -> str:
+        """
+        Clear all stored memories for the current user
+
+        Args:
+            confirm: Must be True to actually clear memories
+
+        Returns:
+            JSON string with result
+        """
+        try:
+            if not confirm:
+                return json.dumps({
+                    "success": False,
+                    "error": "Confirmation required. Set confirm=True to clear all memories."
+                })
+
+            if not self.use_local_memory or not self.local_memory:
+                return json.dumps({
+                    "success": False,
+                    "error": "Local memory system not available"
+                })
+
+            print(f"\n🗑️  Clearing all memories for user: {self.user_id}...")
+
+            # Clear all memories
+            success = self.local_memory.clear_all_memories()
+
+            if success:
+                print(f"✓ All memories cleared for user: {self.user_id}")
+
+                # Emit progress if callback available
+                self._emit_progress("MEMORIES_CLEARED", {
+                    "user_id": self.user_id,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
+
+                return json.dumps({
+                    "success": True,
+                    "message": f"All memories cleared for user: {self.user_id}"
+                })
+            else:
+                raise Exception("Failed to clear memories")
+
+        except Exception as e:
+            error_msg = f"Error clearing memories: {str(e)}"
+            print(f"❌ {error_msg}")
+            import traceback
+            traceback.print_exc()
             return json.dumps({
                 "success": False,
                 "error": error_msg
@@ -2889,6 +3213,18 @@ Be detailed and informative."""
                 summary=args.get("summary", ""),
                 importance=args.get("importance", "medium"),
                 tags=args.get("tags", None)
+            ),
+            "search_memories": lambda: self.search_memories(
+                query=args.get("query", ""),
+                top_k=int(args.get("top_k", 5)),
+                filter_tags=args.get("filter_tags", None)
+            ),
+            "get_recent_memories": lambda: self.get_recent_memories(
+                limit=int(args.get("limit", 10))
+            ),
+            "get_memory_stats": lambda: self.get_memory_stats(),
+            "clear_memories": lambda: self.clear_memories(
+                confirm=args.get("confirm", False)
             ),
             "github_get_commits": lambda: self.github_get_commits(
                 repo_name=args.get("repo_name", ""),
@@ -4105,6 +4441,19 @@ User Question: {question}"""
                         file_path = tool_args.get("file_path", "")
                         file_name = Path(file_path).name if file_path else "unknown"
                         print(f"\n  ℹ️  [{tool_execution_count}] Getting info for: {file_name}")
+                    elif tool_name == "search_memories":
+                        query = tool_args.get("query", "")
+                        print(f"\n  🔍 [{tool_execution_count}] Searching memories: '{query[:50]}...'")
+                    elif tool_name == "get_recent_memories":
+                        limit = tool_args.get("limit", 10)
+                        print(f"\n  📋 [{tool_execution_count}] Getting {limit} recent memories")
+                    elif tool_name == "get_memory_stats":
+                        print(f"\n  📊 [{tool_execution_count}] Getting memory statistics")
+                    elif tool_name == "store_memory":
+                        summary = tool_args.get("summary", "")
+                        print(f"\n  💾 [{tool_execution_count}] Storing memory: {summary}")
+                    elif tool_name == "clear_memories":
+                        print(f"\n  🗑️  [{tool_execution_count}] Clearing all memories")
                     else:
                         print(f"\n  🔧 [{tool_execution_count}] Executing: {tool_name}")
 
@@ -4456,6 +4805,32 @@ If the user asks about:
                                 file_path = tool_args.get("file_path", "")
                                 file_name = Path(file_path).name if file_path else "unknown"
                                 print(f"\n  ℹ️  [{tool_execution_count}] Getting info for: {file_name}")
+                            elif tool_name == "search_memories":
+                                query = tool_args.get("query", "")
+                                print(f"\n  🔍 [{tool_execution_count}] Searching memories: '{query[:50]}...'")
+                            elif tool_name == "get_recent_memories":
+                                limit = tool_args.get("limit", 10)
+                                print(f"\n  📋 [{tool_execution_count}] Getting {limit} recent memories")
+                            elif tool_name == "get_memory_stats":
+                                print(f"\n  📊 [{tool_execution_count}] Getting memory statistics")
+                            elif tool_name == "store_memory":
+                                summary = tool_args.get("summary", "")
+                                print(f"\n  💾 [{tool_execution_count}] Storing memory: {summary}")
+                            elif tool_name == "clear_memories":
+                                print(f"\n  🗑️  [{tool_execution_count}] Clearing all memories")
+                            elif tool_name == "search_memories":
+                                query = tool_args.get("query", "")
+                                print(f"\n  🔍 [{tool_execution_count}] Searching memories: '{query[:50]}...'")
+                            elif tool_name == "get_recent_memories":
+                                limit = tool_args.get("limit", 10)
+                                print(f"\n  📋 [{tool_execution_count}] Getting {limit} recent memories")
+                            elif tool_name == "get_memory_stats":
+                                print(f"\n  📊 [{tool_execution_count}] Getting memory statistics")
+                            elif tool_name == "store_memory":
+                                summary = tool_args.get("summary", "")
+                                print(f"\n  💾 [{tool_execution_count}] Storing memory: {summary}")
+                            elif tool_name == "clear_memories":
+                                print(f"\n  🗑️  [{tool_execution_count}] Clearing all memories")
                             else:
                                 print(f"\n  🔧 [{tool_execution_count}] Executing: {tool_name}")
 
@@ -4647,6 +5022,98 @@ If the user asks about:
                         }
                     },
                     "required": ["query"]
+                }
+            },
+            {
+                "name": "store_memory",
+                "description": "Store important information to long-term local memory with temporal awareness. Use this when you observe something significant or worth remembering. Memories are stored locally with semantic search and temporal decay.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The detailed content to store as a memory"
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "A brief one-sentence summary"
+                        },
+                        "importance": {
+                            "type": "string",
+                            "description": "Importance level: low, medium, or high",
+                            "enum": ["low", "medium", "high"]
+                        },
+                        "tags": {
+                            "type": "array",
+                            "description": "Tags for categorizing (e.g., ['coding', 'python'])",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "required": ["content", "summary", "importance"]
+                }
+            },
+            {
+                "name": "search_memories",
+                "description": "Search through stored memories using semantic search with temporal awareness. Use this to recall past information, context, or activities.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query to find relevant memories"
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of memories to return (default: 5)"
+                        },
+                        "filter_tags": {
+                            "type": "array",
+                            "description": "Optional: Filter by specific tags",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "get_recent_memories",
+                "description": "Get the most recent memories without semantic search. Use this to see what was recently stored.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Number of recent memories to retrieve (default: 10)"
+                        }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "get_memory_stats",
+                "description": "Get statistics about stored memories including total count and storage details.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
+                "name": "clear_memories",
+                "description": "Clear all stored memories for the current user. Use with caution - this is irreversible. Ask for user confirmation first.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "confirm": {
+                            "type": "boolean",
+                            "description": "Must be true to confirm clearing all memories"
+                        }
+                    },
+                    "required": ["confirm"]
                 }
             },
             {

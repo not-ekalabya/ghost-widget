@@ -3,7 +3,7 @@ Version information for Ghost Widget
 This file is automatically updated during releases
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.3"
 __version_info__ = (1, 0, 0)
 
 # GitHub repository information
