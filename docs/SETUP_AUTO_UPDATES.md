@@ -143,9 +143,7 @@ Your executable will be at: `dist\Ghost.exe`
 
 ## For Private Repositories
 
-Your updater is already configured for private repos with the GitHub token in `updater.py`.
-
-**Current token:** `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`
+Your updater is already configured for private repos. Set your GitHub token in the environment variable `GITHUB_TOKEN`.
 
 **Permissions needed:**
 - ✅ `repo` - Full control of private repositories

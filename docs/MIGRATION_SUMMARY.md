@@ -29,9 +29,10 @@ mem0ai
 - Updated availability flag from `SUPERMEMORY_AVAILABLE` to `MEM0_AVAILABLE`
 
 #### Configuration Changes
-- **Hard-coded API key:** `m0-GQo1C1BLFecWLInbI5Cb3R3MAum0cwxwbIOJcKnk`
+- **API Key:** Loaded from `MEM0_API_KEY` environment variable
 - Uses **MemoryClient** for managed Mem0 platform:
   ```python
+  mem0_api_key = os.environ.get("MEM0_API_KEY")
   self.mem0_client = MemoryClient(api_key=mem0_api_key)
   ```
 - **No graph database configuration needed** - handled automatically by platform

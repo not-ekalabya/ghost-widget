@@ -95,9 +95,9 @@ Instead of:
 
 ## API Key
 
-Hard-coded in backend.py:74:
+Configure in environment variables:
 ```python
-mem0_api_key = "m0-GQo1C1BLFecWLInbI5Cb3R3MAum0cwxwbIOJcKnk"
+mem0_api_key = os.environ.get("MEM0_API_KEY")
 ```
 
 ## References

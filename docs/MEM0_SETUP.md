@@ -29,9 +29,9 @@ pip install mem0ai
 
 ### 3. Implementation Details
 
-The Mem0 API key is **hard-coded** in `backend.py`:
+The Mem0 API key should be loaded from the environment:
 ```python
-mem0_api_key = "m0-GQo1C1BLFecWLInbI5Cb3R3MAum0cwxwbIOJcKnk"
+mem0_api_key = os.environ.get("MEM0_API_KEY")
 ```
 
 The application uses `MemoryClient` which connects to the **managed Mem0 platform**:

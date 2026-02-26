@@ -36,7 +36,9 @@ class UpdateChecker:
         self.current_version = current_version
         self.update_url = UPDATE_CHECK_URL
         self.github_repo = GITHUB_REPO
-        self.github_token = "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"  # Replace with token from https://github.com/settings/tokens/new
+        self.github_token = os.environ.get("GITHUB_TOKEN")
+        if not self.github_token:
+            print("[WARNING] GITHUB_TOKEN not set in environment. Private repo updates will not work.")
         self.download_progress_callback: Optional[Callable] = None
 
         # Setup logging to file

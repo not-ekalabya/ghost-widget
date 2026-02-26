@@ -3,8 +3,12 @@ Test script to verify GitHub repository and releases are accessible
 """
 import requests
 
+
 GITHUB_REPO = "not-ekalabya/ghost-widget"
-GITHUB_TOKEN = "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"
+import os
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+if not GITHUB_TOKEN:
+    print("[WARNING] GITHUB_TOKEN not set in environment. GitHub API tests may fail.")
 
 def test_repo():
     """Test if repository exists"""
