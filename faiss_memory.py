@@ -427,7 +427,8 @@ if __name__ == "__main__":
         
     api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("Please set GOOGLE_API_KEY environment variable")
+        print("[ERROR] GOOGLE_API_KEY or GEMINI_API_KEY environment variable not set. Exiting.")
+        exit(1)
         exit(1)
 
     memory = FAISSMemorySystem(

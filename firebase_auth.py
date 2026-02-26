@@ -497,37 +497,30 @@ if __name__ == "__main__":
     except ImportError:
         pass
 
-    # Example Firebase configuration
+    # Example Firebase configuration loaded from environment variables ONLY
     config = {
-        "apiKey": os.environ.get("FIREBASE_API_KEY", ""),
-        "authDomain": os.environ.get("FIREBASE_AUTH_DOMAIN", ""),
-        "projectId": os.environ.get("FIREBASE_PROJECT_ID", ""),
-        "databaseURL": os.environ.get("FIREBASE_DATABASE_URL", ""),
-        "storageBucket": os.environ.get("FIREBASE_STORAGE_BUCKET", ""),
-        "google_client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
-        "google_client_secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),
-        "messagingSenderId": os.environ.get("FIREBASE_MESSAGING_SENDER_ID", ""),
-        "appId": os.environ.get("FIREBASE_APP_ID", ""),
-        "measurementId": os.environ.get("FIREBASE_MEASUREMENT_ID", "")
+        "apiKey": os.environ.get("FIREBASE_API_KEY"),
+        "authDomain": os.environ.get("FIREBASE_AUTH_DOMAIN"),
+        "projectId": os.environ.get("FIREBASE_PROJECT_ID"),
+        "databaseURL": os.environ.get("FIREBASE_DATABASE_URL"),
+        "storageBucket": os.environ.get("FIREBASE_STORAGE_BUCKET"),
+        "google_client_id": os.environ.get("GOOGLE_CLIENT_ID"),
+        "google_client_secret": os.environ.get("GOOGLE_CLIENT_SECRET"),
+        "messagingSenderId": os.environ.get("FIREBASE_MESSAGING_SENDER_ID"),
+        "appId": os.environ.get("FIREBASE_APP_ID"),
+        "measurementId": os.environ.get("FIREBASE_MEASUREMENT_ID")
     }
-    
-    # Check if config is loaded
-    if not config["apiKey"]:
-        print("Please configure .env file to run this test.")
+
+    # Ensure all required secrets are set
+    required_env_vars = [
+        "FIREBASE_API_KEY", "FIREBASE_AUTH_DOMAIN", "FIREBASE_PROJECT_ID", "FIREBASE_DATABASE_URL", "FIREBASE_STORAGE_BUCKET", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"
+    ]
+    missing = [var for var in required_env_vars if not os.environ.get(var)]
+    if missing:
+        print(f"Please set the following environment variables in your .env file: {', '.join(missing)}")
         exit(1)
 
     print(f"Testing Auth with project: {config['projectId']}")
-    auth = FirebaseAuth(config=config)
-
-    # {
-    #     "apiKey": "YOUR_FIREBASE_API_KEY",
-    #     "authDomain": "your-project.firebaseapp.com",
-    #     "databaseURL": "https://your-project.firebaseio.com",
-    #     "storageBucket": "your-project.appspot.com",
-    #     "google_client_id": "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
-    #     "google_client_secret": "YOUR_GOOGLE_CLIENT_SECRET"
-    # }
-
     firebase_auth = FirebaseAuth(config=config)
 
     # Sign in with Google
