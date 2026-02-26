@@ -80,8 +80,5 @@ We welcome contributions! Please see `docs/README_BUILD.md` for build instructio
 ## License
 This project is licensed under the MIT License.
 
-## Support & Contact
-For questions, suggestions, or support, please open an issue on GitHub or contact the maintainer at [your.email@example.com].
-
 ---
 Ghost Widget: Helping you remember, your way — with privacy and control.
