@@ -26,7 +26,9 @@ except ImportError:
 # GitHub OAuth App credentials
 # You need to create your own GitHub OAuth App and add the client ID here
 # See docs/GITHUB_SETUP.md for instructions
-GITHUB_CLIENT_ID = "Ov23liRuv6eUrOFr87QP"
+GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID")
+if not GITHUB_CLIENT_ID:
+    print("[WARNING] GITHUB_CLIENT_ID not set in environment. GitHub integration will not work.")
 
 
 class GitHubAuth:

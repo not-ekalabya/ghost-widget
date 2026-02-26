@@ -54,14 +54,27 @@ class AnalyticsTracker:
         # Initialize analytics (local tracking, Firebase optional)
         try:
             config_path = Path(config_path)
-            if config_path.exists():
+            # Try to load from environment variables first
+            self.project_id = os.environ.get("FIREBASE_PROJECT_ID")
+            self.measurement_id = os.environ.get("FIREBASE_MEASUREMENT_ID")
+            self.api_secret = os.environ.get("FIREBASE_ANALYTICS_API_SECRET")
+            
+            # If not in env, check config file (legacy behavior)
+            if not (self.project_id and self.measurement_id and self.api_secret) and config_path.exists():
                 with open(config_path, 'r') as f:
                     firebase_config = json.load(f)
-                self.project_id = "ghost-widget-7000"
-                self.measurement_id = "G-XGLGL9E2TJ" # replace with google-config
-                # Try dedicated GA4 API secret first, fall back to apiKey (for backwards compatibility)
-                self.api_secret = "AIzaSyBsig0QxBmVelZQwef23-MoTFdeuZM5P-4"
-            else:
+                
+                # If still missing, try to load from config file dict
+                if not self.project_id:
+                    self.project_id = firebase_config.get("projectId")
+                if not self.measurement_id:
+                    self.measurement_id = firebase_config.get("measurementId")
+                if not self.api_secret:
+                    # Fallback to apiKey if dedicated secret not present
+                    self.api_secret = firebase_config.get("apiKey")
+            
+            if not self.project_id:
+                # Still missing, disable cloud sync
                 self.project_id = None
                 self.measurement_id = None
                 self.api_secret = None

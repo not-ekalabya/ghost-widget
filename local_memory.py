@@ -5,6 +5,11 @@ Provides privacy-focused, local-only memory storage with intelligent temporal re
 """
 
 import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+except ImportError:
+    pass
 import json
 import sqlite3
 from datetime import datetime, timedelta
@@ -64,7 +69,10 @@ class LocalMemorySystem:
         self._db_lock = threading.RLock()
 
         # Configure Google AI for embeddings
-        genai.configure(api_key='AIzaSyBY6rQz-TCRenrrdXv2uKbE4GTbgHQbLuk')
+        # Prefer environment variable if set, else use passed api_key
+        env_api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+        effective_api_key = env_api_key if env_api_key else api_key
+        genai.configure(api_key=effective_api_key)
 
         # Initialize ChromaDB with persistent storage
         self.db_path.mkdir(exist_ok=True)
@@ -404,10 +412,10 @@ if __name__ == "__main__":
     # Test the local memory system
     print("Testing Local Memory System with Temporal Awareness\n")
 
-    # Initialize (replace with your API key)
-    api_key = "AIzaSyBY6rQz-TCRenrrdXv2uKbE4GTbgHQbLuk"
+    # Initialize using API key from environment or fallback
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("Please set GEMINI_API_KEY environment variable")
+        print("Please set GOOGLE_API_KEY or GEMINI_API_KEY environment variable in your .env file")
         exit(1)
 
     memory = LocalMemorySystem(

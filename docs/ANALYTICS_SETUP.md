@@ -25,14 +25,14 @@ Add the API secret to your `firebase_config.json` file:
 
 ```json
 {
-  "apiKey": "AIzaSyBsig0QxBmVelZQwef23-MoTFdeuZM5P-4",
-  "authDomain": "ghost-widget-7000.firebaseapp.com",
-  "projectId": "ghost-widget-7000",
-  "databaseURL": "https://ghost-widget-7000-default-rtdb.firebaseio.com/",
-  "storageBucket": "ghost-widget-7000.firebasestorage.app",
-  "google_client_id": "816342083028-te98svps0mjo5230g3aasfipt8qr824g.apps.googleusercontent.com",
-  "google_client_secret": "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",
-  "messagingSenderId": "816342083028",
+  "apiKey": "YOUR_FIREBASE_API_KEY",
+  "authDomain": "your-project.firebaseapp.com",
+  "projectId": "your-project-id",
+  "databaseURL": "https://your-project-default-rtdb.firebaseio.com/",
+  "storageBucket": "your-project.firebasestorage.app",
+  "google_client_id": "your-google-client-id.apps.googleusercontent.com",
+  "google_client_secret": "your-google-client-secret",
+  "messagingSenderId": "1234567890",
   "appId": "1:816342083028:web:0e0d8aa40d66bf858f2241",
   "measurementId": "G-XGLGL9E2TJ",
   "ga4_api_secret": "YOUR_API_SECRET_HERE"

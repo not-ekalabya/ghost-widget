@@ -24,8 +24,16 @@ from html import escape
 import datetime
 import faulthandler
 
+
 # Enable faulthandler to catch segfaults and print traceback
 faulthandler.enable()
+
+# Load environment variables from .env file (with overwrite enabled)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+except ImportError:
+    print("[WARNING] python-dotenv not installed. Please install it for .env support.")
 
 # Try importing markdown library
 try:
@@ -298,12 +306,12 @@ class CompanionRunner(threading.Thread):
         if BackgroundCompanion is None:
             raise RuntimeError("Couldn't import BackgroundCompanion from main.py.\n" + _import_error)
 
-        # 🔑 Hardcoded API key – replace this string with your real one
-        HARD_CODED_API_KEY = "AIzaSyBY6rQz-TCRenrrdXv2uKbE4GTbgHQbLuk"
 
+        # Load API key from environment
+        api_key = os.environ.get("GOOGLE_API_KEY", "")
         # Set environment variable too, just in case main.py reads it from os.environ
-        os.environ["GOOGLE_API_KEY"] = HARD_CODED_API_KEY
-        os.environ["GEMINI_API_KEY"] = HARD_CODED_API_KEY
+        os.environ["GOOGLE_API_KEY"] = api_key
+        os.environ["GEMINI_API_KEY"] = api_key
 
         # Progress callback to send progress updates to GUI
         def progress_callback(event_type, data):
@@ -313,8 +321,9 @@ class CompanionRunner(threading.Thread):
         user_id = self.config.get("user_id", "default_user")
 
         # Pass directly to the class
+
         kwargs = {
-            "api_key": HARD_CODED_API_KEY,
+            "api_key": api_key,
             "capture_interval": self.config.get("interval", 10),  # Kept for backward compatibility
             "recording_fps": self.config.get("fps", 1),
             "analysis_interval": self.config.get("analysis_interval", 40),
@@ -710,17 +719,22 @@ class OverlayWindow(QWidget):
         try:
             # Use embedded Firebase configuration to avoid external files
             embedded_firebase_config = {
-              "apiKey": "AIzaSyBsig0QxBmVelZQwef23-MoTFdeuZM5P-4",
-              "authDomain": "ghost-widget-7000.firebaseapp.com",
-              "projectId": "ghost-widget-7000",
-              "databaseURL": "https://ghost-widget-7000-default-rtdb.firebaseio.com/",
-              "storageBucket": "ghost-widget-7000.firebasestorage.app",
-              "google_client_id": "816342083028-te98svps0mjo5230g3aasfipt8qr824g.apps.googleusercontent.com",
-              "google_client_secret": "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",
-              "messagingSenderId": "816342083028",
-              "appId": "1:816342083028:web:0e0d8aa40d66bf858f2241",
-              "measurementId": "G-XGLGL9E2TJ"
+                "apiKey": os.environ.get("FIREBASE_API_KEY", ""),
+                "authDomain": os.environ.get("FIREBASE_AUTH_DOMAIN", ""),
+                "projectId": os.environ.get("FIREBASE_PROJECT_ID", ""),
+                "databaseURL": os.environ.get("FIREBASE_DATABASE_URL", ""),
+                "storageBucket": os.environ.get("FIREBASE_STORAGE_BUCKET", ""),
+                "google_client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
+                "google_client_secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),
+                "messagingSenderId": os.environ.get("FIREBASE_MESSAGING_SENDER_ID", ""),
+                "appId": os.environ.get("FIREBASE_APP_ID", ""),
+                "measurementId": os.environ.get("FIREBASE_MEASUREMENT_ID", "")
             }
+            
+            # Check if critical config is missing
+            if not embedded_firebase_config["apiKey"] or not embedded_firebase_config["projectId"]:
+                print("Firebase Auth skipped: Missing configuration in .env")
+                return
 
             self.firebase_auth = FirebaseAuth(config=embedded_firebase_config, persist_auth=True)
             print("Firebase Auth initialized successfully")
@@ -3971,21 +3985,21 @@ def main():
     firebase_auth = None
     if FIREBASE_AVAILABLE:
         try:
-            # Use embedded Firebase configuration to avoid external files
-            embedded_firebase_config = {
-              "apiKey": "AIzaSyBsig0QxBmVelZQwef23-MoTFdeuZM5P-4",
-              "authDomain": "ghost-widget-7000.firebaseapp.com",
-              "projectId": "ghost-widget-7000",
-              "databaseURL": "https://ghost-widget-7000-default-rtdb.firebaseio.com/",
-              "storageBucket": "ghost-widget-7000.firebasestorage.app",
-              "google_client_id": "816342083028-te98svps0mjo5230g3aasfipt8qr824g.apps.googleusercontent.com",
-              "google_client_secret": "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",
-              "messagingSenderId": "816342083028",
-              "appId": "1:816342083028:web:0e0d8aa40d66bf858f2241",
-              "measurementId": "G-XGLGL9E2TJ"
+            # Load Firebase config from environment variables
+            firebase_config = {
+                "apiKey": os.environ.get("FIREBASE_API_KEY", ""),
+                "authDomain": os.environ.get("FIREBASE_AUTH_DOMAIN", ""),
+                "projectId": os.environ.get("FIREBASE_PROJECT_ID", ""),
+                "databaseURL": os.environ.get("FIREBASE_DATABASE_URL", ""),
+                "storageBucket": os.environ.get("FIREBASE_STORAGE_BUCKET", ""),
+                "google_client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
+                "google_client_secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),
+                "messagingSenderId": os.environ.get("FIREBASE_MESSAGING_SENDER_ID", ""),
+                "appId": os.environ.get("FIREBASE_APP_ID", ""),
+                "measurementId": os.environ.get("FIREBASE_MEASUREMENT_ID", "")
             }
 
-            firebase_auth = FirebaseAuth(config=embedded_firebase_config, persist_auth=True)
+            firebase_auth = FirebaseAuth(config=firebase_config, persist_auth=True)
             print("✅ Firebase Auth initialized")
         except Exception as e:
             print(f"❌ Failed to initialize Firebase Auth: {e}")

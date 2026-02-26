@@ -418,9 +418,16 @@ if __name__ == "__main__":
     print("Testing FAISS Memory System with Temporal Awareness\n")
 
     # Initialize
-    api_key = "AIzaSyBY6rQz-TCRenrrdXv2uKbE4GTbgHQbLuk"
+    # Try to load API key from environment
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+    except ImportError:
+        pass
+        
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("Please set API key")
+        print("Please set GOOGLE_API_KEY environment variable")
         exit(1)
 
     memory = FAISSMemorySystem(

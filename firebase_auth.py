@@ -491,19 +491,33 @@ class FirebaseAuth:
 
 # Example usage
 if __name__ == "__main__":
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+    except ImportError:
+        pass
+
     # Example Firebase configuration
     config = {
-      "apiKey": "AIzaSyBsig0QxBmVelZQwef23-MoTFdeuZM5P-4",
-      "authDomain": "ghost-widget-7000.firebaseapp.com",
-      "projectId": "ghost-widget-7000",
-      "databaseURL": "https://ghost-widget-7000-default-rtdb.firebaseio.com/",
-      "storageBucket": "ghost-widget-7000.firebasestorage.app",
-      "google_client_id": "816342083028-te98svps0mjo5230g3aasfipt8qr824g.apps.googleusercontent.com",
-      "google_client_secret": "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",
-      "messagingSenderId": "816342083028",
-      "appId": "1:816342083028:web:0e0d8aa40d66bf858f2241",
-      "measurementId": "G-XGLGL9E2TJ"
+        "apiKey": os.environ.get("FIREBASE_API_KEY", ""),
+        "authDomain": os.environ.get("FIREBASE_AUTH_DOMAIN", ""),
+        "projectId": os.environ.get("FIREBASE_PROJECT_ID", ""),
+        "databaseURL": os.environ.get("FIREBASE_DATABASE_URL", ""),
+        "storageBucket": os.environ.get("FIREBASE_STORAGE_BUCKET", ""),
+        "google_client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
+        "google_client_secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),
+        "messagingSenderId": os.environ.get("FIREBASE_MESSAGING_SENDER_ID", ""),
+        "appId": os.environ.get("FIREBASE_APP_ID", ""),
+        "measurementId": os.environ.get("FIREBASE_MEASUREMENT_ID", "")
     }
+    
+    # Check if config is loaded
+    if not config["apiKey"]:
+        print("Please configure .env file to run this test.")
+        exit(1)
+
+    print(f"Testing Auth with project: {config['projectId']}")
+    auth = FirebaseAuth(config=config)
 
     # {
     #     "apiKey": "YOUR_FIREBASE_API_KEY",

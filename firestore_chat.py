@@ -21,20 +21,35 @@ from typing import List, Dict, Any, Optional
 import json
 
 
-# Hardcoded Firebase credentials
-FIREBASE_CONFIG = {
-    "type": "service_account",
-    "project_id": "ghost-widget-7000",
-    "private_key_id": "327f4e72fc0e89b33182dedf499109e51122c3c9",
-    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDb/tXAWDrOd/GR\nVHkWXMiFYQAYPeVQhzF2Yp/TRt8R/xXzvdLa5DxaPnGWB5JLJpFShaV2DnJ5BKpg\nCRUDBKVIRUe5Bhz0W5tEtufpgdvy59X/f8YHnq+WkOEUjqQsA3mqAlRBkE9gu4y5\nU4bKwwestmGT2q9qYqZhL2PMcbflqbn32EexLVU3WjNsadY3BJV3OuGO8qynMrNE\nszD9ViBi1E8PNT2wJQrYJzRKVim0NNTQTEUozojpIfJhywTlIPD4wC8Y+BF22KPk\nSA6vblT4iUUFSyNXQ6FyeDFX6D6JeG08DQ/ExRcDSd+Pf34cpP4vboEEUhKnSMw+\nXdJd2VfRAgMBAAECggEAAS+xNJW4adw1t93nvtogCEmxawmlm4PCULjpbOwJHRsh\nO1/YeKIaCgNW/Q/sMKGNnEKCPBrwPRZsWl/SKckA0/a9Rni+kTn2CJUGUFKivmWU\ncgmpv+krWZ/mxtCaGNUP9xdTuWLI1GToHMIf8o0orm+K749fU/u7zL+PrAH0+ht0\noqSJv6s4XRaivl8uLqHusdhWHvyOALcxFmQkduStxHKsRpn2qu+B3YiCwbJXSQlV\nKTUTU+GW0/W1o9a0k5PG+zb4/uq5R9tcQMpCtIjY7/XNTjK7+sY0uUYPyQ4hFbYK\nqfe/KO2pFSywTFL1aYD+cujz7cJoNtiD6TRT07jzfQKBgQDuqhYIKMrrUr3J5Onv\n6tuXrbycPWJFy7oZ7cBHIq1z0tw8tfs1lbVeBBnzK09wXgiVIHEwIEFVFS37CS0K\ngfaBul1ZQ2dFkOOpUpcPLnZgNWBO//Itd7Ug2GEcEJ5XULB/FryulQQgy+evYUmF\nQcz5k9S2hM7DDfpiO2lRd52Q8wKBgQDr+ZqOxrRkKgIX9RUoWkZ0UFo4evHEiuw1\nrPwlOnbv1skKnbnDph32isK4yQrwQwkwqb6WlgNYFaDOYhLiRxfGd1tLRAVs30NH\nPuIwCqMmczsrC9aWB7LLvG/ZyzCXzJwx8SZq1sih3yxiu9xWsNMgWWPeQ96adnES\nRgGFEI3FKwKBgQDTyfGlKfXwX8t1lwMV2VcmwZEHIN3NTB2IltezCI3do3e3FFKp\nWYHJvV/9zyg+ceOx2kk3SNhRFWtpQtpKYcwLkQL3jH3fWNT+VAEjArsfYx5k3HHf\ncUQ1sm5yhjjNCRimntmvHyO7qtadZnrkmuC3dT0k/rOwmf3gIBK0ra4QiwKBgQDW\n7eWknb+4a7q0b3nx4yfA0V8bin+i8JXs3b5bekDSeuNqU/bbCPbJk+F/xT29UJGS\nTUlWhxRMqoZo9FMW3oH9NsFkcHQwkboJrnD+KPIpF1ORBZtR03k6sEuAJ93+pVKu\n+mJvdWoQZeFbnJg4LZ5fHIwl6dNbBP5AEptXw5gdOQKBgQDQl7uppWFd6OamUOhj\nWhEq5h6fqEN2jO7iSyrF6IbWsRa943p/9jyFwYWPBGh6tKNhbZQJuS+8f5/wd3j0\nyAwf7PSclR0AXGDhhRVMB2h8Q7ibDLIP4LgoH6A0b1ZLCSRnlUvxcWMt1wByLzz9\nzA5tZ/c792MuRFfi6lyM4+smAg==\n-----END PRIVATE KEY-----\n",
-    "client_email": "firebase-adminsdk-iddqd@ghost-widget-7000.iam.gserviceaccount.com",
-    "client_id": "103726089880083606018",
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-iddqd%40ghost-widget-7000.iam.gserviceaccount.com",
-    "universe_domain": "googleapis.com"
-}
+import os
+
+# Firebase Service Account Configuration
+# Load from environment variables
+def get_firebase_config():
+    project_id = os.environ.get("FIREBASE_SERVICE_ACCOUNT_PROJECT_ID")
+    private_key = os.environ.get("FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY")
+    client_email = os.environ.get("FIREBASE_SERVICE_ACCOUNT_CLIENT_EMAIL")
+    
+    if not (project_id and private_key and client_email):
+        print("[WARNING] Firebase Service Account credentials not found in environment variables. Chat history sync will be disabled.")
+        return None
+
+    return {
+        "type": "service_account",
+        "project_id": project_id,
+        "private_key_id": os.environ.get("FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY_ID"),
+        # Handle private key with proper newline expansion
+        "private_key": private_key.replace('\\n', '\n'),
+        "client_email": client_email,
+        "client_id": os.environ.get("FIREBASE_SERVICE_ACCOUNT_CLIENT_ID"),
+        "auth_uri": os.environ.get("FIREBASE_SERVICE_ACCOUNT_AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
+        "token_uri": os.environ.get("FIREBASE_SERVICE_ACCOUNT_TOKEN_URI", "https://oauth2.googleapis.com/token"),
+        "auth_provider_x509_cert_url": os.environ.get("FIREBASE_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs"),
+        "client_x509_cert_url": os.environ.get("FIREBASE_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL"),
+        "universe_domain": os.environ.get("FIREBASE_SERVICE_ACCOUNT_UNIVERSE_DOMAIN", "googleapis.com")
+    }
+
+FIREBASE_CONFIG = get_firebase_config()
 
 
 class FirestoreChatManager:

@@ -471,7 +471,10 @@ def main():
     args = parser.parse_args()
 
     # Get API key from environment if not provided
-    api_key = "AIzaSyBY6rQz-TCRenrrdXv2uKbE4GTbgHQbLuk"
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+
+    if not api_key:
+        print("[WARNING] No API key found in environment. Some features may fail.")
 
     inspector = DatabaseInspector(
         sqlite_db_path=args.sqlite_db,
